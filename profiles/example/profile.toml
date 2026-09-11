@@ -1,0 +1,32 @@
+[profile]
+id = "example"
+name = "Example Agent"
+description = "Public demo profile: one dummy HTTP JSON tool"
+
+[model]
+spec = "test"
+request_limit = 20
+retries = 2
+
+[code_tool]
+name = "data_code"
+purpose = "THE ONLY WAY TO FETCH DATA: the tools listed below exist solely as Python functions inside this sandbox. Fetch here, save big payloads to /work/data/, return a small result. For analyzing already-saved files use python_analysis instead (full CPython)."
+wall_clock_s = 60
+max_retries = 3
+
+[tools]
+modules = ["json_placeholder.py"]
+
+[env]
+required = []
+[env.defaults]
+JSON_API_BASE = "https://jsonplaceholder.typicode.com"
+
+[limits]
+spill_tokens = 8000
+analysis_timeout_s = 60
+
+[instructions]
+data_tool_examples = "get_post, list_posts"
+data_file_example = "data/posts.json"
+report_detail_hint = "the fetched records"

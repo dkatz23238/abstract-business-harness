@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+data/
+.env
+*.egg-info/
+ui/node_modules/
+ui/dist/
+.secrets.env
+secrets.env

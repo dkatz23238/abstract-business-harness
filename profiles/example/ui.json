@@ -1,0 +1,7 @@
+{
+  "title": "Example Agent",
+  "data_calls_label": "API calls",
+  "data_source_name": "the demo API",
+  "placeholder": "Try: list a few posts from the demo API",
+  "hint": "This is the public example profile. Ask it to fetch a post or list users from the demo JSON API."
+}
