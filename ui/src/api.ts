@@ -1,5 +1,8 @@
 // Server endpoints and helpers shared by the panes.
 
+export const API_URL: string =
+  (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8811";
+
 export interface ProfileConfig {
   id: string;
   name: string;
@@ -122,9 +125,8 @@ export interface ToolActivity {
   /** Set on the end event when the tool raised (ModelRetry, exception) or was cancelled. */
   error?: string;
   status?: "ok" | "error" | "cancelled";
-  /** "data" = one individual data-source read; "control" = agent machinery.
-   *  "gamma" is the legacy name from older logs. */
-  kind?: "data" | "gamma" | "control";
+  /** "data" = one individual data-source read; "control" = agent machinery. */
+  kind?: "data" | "control";
   done: boolean;
 }
 
@@ -194,8 +196,8 @@ export function subscribeToolEvents(
     const ev = JSON.parse(msg.data);
     if (ev.phase === "summary") {
       onSummary?.({
-        dataCalls: ev.data_calls ?? ev.gamma_calls ?? 0,
-        codeBlocks: ev.code_blocks ?? ev.gamma_code_blocks ?? 0,
+        dataCalls: ev.data_calls ?? 0,
+        codeBlocks: ev.code_blocks ?? 0,
         lastTs: ev.last_ts ?? 0,
         usage: toUsageTotals(ev.usage),
       });

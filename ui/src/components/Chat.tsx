@@ -413,12 +413,14 @@ function ToolCard({
   nested,
   protocol,
   running,
+  dataSourceName = "the data source",
 }: {
   call: ToolCallRef;
   activity?: ToolActivity;
   nested: ToolActivity[];
   protocol?: ProtocolResult;
   running: boolean;
+  dataSourceName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [showCode, setShowCode] = useState(false);
@@ -651,6 +653,7 @@ export default function Chat({
                   nested={nestedByParent.get(call.id) ?? []}
                   protocol={protocolResults.get(call.id)}
                   running={running}
+                  dataSourceName={dataSourceName}
                 />
               ))}
             </div>

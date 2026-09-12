@@ -40,7 +40,7 @@ from starlette.datastructures import Headers, QueryParams
 
 from . import admin, engine as engine_mod, profile as profile_mod
 from .bridge import NestedCallBridge, hub, safe_id as _safe_id
-from .config import EngineSettings
+from .config import EngineSettings, load_dotenv
 from .profile import Profile
 from .runs import RunActiveError, RunManager, ThreadRun, next_or_shutdown, shutdown
 from .usage import UsageMeter, summary as usage_summary
@@ -319,9 +319,6 @@ def create_app(
         history = hub.replay(thread_id)
         summary = hub.summary(thread_id)
         summary["usage"] = usage_summary(state.threads_dir, thread_id)
-        # Keep the old field names so a copied UI / old logs still parse.
-        summary["gamma_calls"] = summary.get("data_calls", 0)
-        summary["gamma_code_blocks"] = summary.get("code_blocks", 0)
 
         async def stream():
             try:
@@ -427,8 +424,14 @@ def _app_from_env():
     path = os.environ.get("HARNESS_PROFILE")
     if not path:
         return FastAPI(title="bizharness (set HARNESS_PROFILE)")
+    profile_path = Path(path).expanduser()
+    load_dotenv(profile_path / ".env")
     engine = EngineSettings()
-    return create_app(profile_mod.load(path, settings=engine), engine=engine, profile_path=Path(path))
+    return create_app(
+        profile_mod.load(profile_path, settings=engine),
+        engine=engine,
+        profile_path=profile_path,
+    )
 
 
 app = _app_from_env()

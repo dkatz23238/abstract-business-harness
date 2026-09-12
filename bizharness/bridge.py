@@ -37,12 +37,10 @@ def safe_id(thread_id: str) -> str:
 def is_data_event(event: dict, data_tools: frozenset[str]) -> bool:
     """Is this event one individual data-source call (nested or not)?
 
-    New events carry `kind`; events logged before that was stamped (or by an
-    older deployment that named the kind after its data source) are
-    classified by tool name.
+    New events carry `kind`; events logged without it are classified by tool name.
     """
     kind = event.get("kind")
-    if kind in ("data", "gamma"):
+    if kind == "data":
         return True
     if kind == "control":
         return False

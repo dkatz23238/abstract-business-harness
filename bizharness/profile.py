@@ -210,7 +210,13 @@ class Profile:
     def resolve_instructions(self) -> str:
         """instructions.md + core blocks + the inlined skills."""
         body = self.render(self.instructions_template, where="instructions.md")
-        return body + self._reference_material()
+        extra = self._reference_material()
+        if not extra:
+            return body
+        # instructions.md files usually end with a newline; strip so the
+        # header's leading blank line matches the original in-source prompt
+        # (one blank line before REFERENCE MATERIAL, not two).
+        return body.rstrip("\n") + extra
 
     def render(self, template: str, *, where: str = "template") -> str:
         """Substitute this profile's variables and `{{ core.* }}` blocks.

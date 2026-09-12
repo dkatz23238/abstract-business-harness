@@ -111,11 +111,11 @@ export default function App() {
     const codeTool = profile?.code_tool ?? "run_code";
     for (const a of activities.values()) {
       if (a.startedAt <= base.lastTs) continue;
-      if (a.kind === "data" || a.kind === "gamma") calls += 1;
+      if (a.kind === "data") calls += 1;
       else if (a.tool === codeTool || a.tool === "run_code") blocks += 1;
     }
     for (const a of activities.values()) {
-      if ((a.kind === "data" || a.kind === "gamma") && !a.done) live += 1;
+      if (a.kind === "data" && !a.done) live += 1;
     }
     return { calls, blocks, live };
   }, [activities, feedSummary, profile]);

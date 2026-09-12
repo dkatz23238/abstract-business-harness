@@ -6,10 +6,11 @@ import argparse
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from .config import EngineSettings, load_dotenv
-from .profile import ProfileError, delete_secret, load, write_secret
+from .profile import Profile, ProfileError, delete_secret, load, write_secret
 
 
 def _engine(args) -> EngineSettings:
@@ -25,12 +26,26 @@ def _load_profile(args):
     return load(path, settings=_engine(args))
 
 
+def _setup_tracing(service_name: str) -> None:
+    """With LOGFIRE_TOKEN set, full traces stream to the Logfire web UI."""
+    token = os.environ.get("LOGFIRE_TOKEN")
+    if not token:
+        return
+    import logfire
+
+    logfire.configure(
+        send_to_logfire=True, token=token, console=False, service_name=service_name
+    )
+    logfire.instrument_pydantic_ai()
+
+
 def cmd_serve(args) -> None:
     import uvicorn
 
     from .server import create_app
 
     profile = _load_profile(args)
+    _setup_tracing(f"bizharness:{profile.id}")
     app = create_app(profile, engine=_engine(args), profile_path=Path(args.profile).expanduser())
     print(
         f"[bizharness] profile={profile.id} model={profile.model.spec} "
@@ -45,6 +60,7 @@ def cmd_chat(args) -> None:
     from .engine import build
 
     profile = _load_profile(args)
+    _setup_tracing(f"bizharness:{profile.id}")
     built = build(profile, trace_tools=args.verbose)
     limits = UsageLimits(request_limit=profile.model.request_limit)
     print(
@@ -58,33 +74,151 @@ def cmd_chat(args) -> None:
     built.agent.to_cli_sync(prog_name=f"bizharness:{profile.id}", usage_limits=limits)
 
 
+def _console():
+    from rich.console import Console
+
+    return Console(stderr=False)
+
+
+def _fmt_seconds(seconds: float) -> str:
+    if seconds >= 3600:
+        return f"{seconds / 3600:.0f}h"
+    if seconds >= 60:
+        return f"{seconds / 60:.0f}m"
+    return f"{seconds:.0f}s"
+
+
+def _print_problems(console, problems: list[str]) -> None:
+    for problem in problems:
+        console.print(f"  [red]×[/] {problem}")
+
+
+def _print_validate_report(
+    profile: Profile,
+    tool_names: list[str],
+    *,
+    elapsed_s: float,
+    ok: bool = True,
+    env_rows: list[dict] | None = None,
+) -> None:
+    """Human-readable validate report: sections, checks, wrapping tool list."""
+    from rich.padding import Padding
+    from rich.text import Text
+
+    console = _console()
+    title = profile.name if profile.name != profile.id else profile.id
+    console.print()
+    console.print(f"[bold]{title}[/]  [dim]{profile.id}[/]")
+    console.print(f"[dim]{profile.path}[/]")
+    if profile.description:
+        console.print(f"[dim]{profile.description}[/]")
+    console.print()
+
+    kv = [
+        ("hash", profile.hash),
+        ("model", profile.model.spec),
+        (
+            "code tool",
+            f"{profile.code_tool.name}  [dim]{_fmt_seconds(profile.code_tool.wall_clock_s)} wall clock[/]",
+        ),
+        ("requests", f"{profile.model.request_limit} per run"),
+        ("data", str(profile.data_dir)),
+    ]
+    label_w = max(len(k) for k, _ in kv)
+    for key, value in kv:
+        console.print(f"  [dim]{key:<{label_w}}[/]  {value}")
+
+    if profile.skills.inline or profile.skills.deferred:
+        console.print()
+        console.print("  [bold]Skills[/]")
+        if profile.skills.inline:
+            console.print("    [dim]inline[/]     " + ", ".join(profile.skills.inline))
+        if profile.skills.deferred:
+            console.print("    [dim]deferred[/]   " + ", ".join(profile.skills.deferred))
+
+    rows = env_rows if env_rows is not None else profile.env_status()
+    if rows:
+        console.print()
+        console.print("  [bold]Environment[/]")
+        name_w = max(len(r["name"]) for r in rows)
+        for row in rows:
+            flag = "required" if row["required"] else "optional"
+            if row["set"]:
+                mark, state = "[green]✓[/]", "[green]set[/]"
+            elif row["required"]:
+                mark, state = "[red]×[/]", "[red]unset[/]"
+            else:
+                mark, state = "[dim]·[/]", "[dim]unset[/]"
+            console.print(
+                f"    {mark} {row['name']:<{name_w}}  [dim]{flag:<8}[/] {state}  [dim]{row['source']}[/]"
+            )
+
+    if tool_names:
+        console.print()
+        console.print(f"  [bold]Tools[/]  [dim]{len(tool_names)}[/]")
+        listed = Text("  ".join(tool_names), style="cyan")
+        console.print(Padding(listed, (0, 0, 0, 4)))
+    console.print()
+    if ok:
+        console.print(f"[green]✓[/] Profile is valid  [dim]{elapsed_s:.2f}s[/]")
+        console.print()
+
+
 def cmd_validate(args) -> None:
     from . import plugins
+    from .plugins import PluginError
 
+    console = _console()
+    t0 = time.perf_counter()
     try:
         profile = _load_profile(args)
     except ProfileError as exc:
-        print("INVALID")
-        for p in exc.problems:
-            print(f"  - {p}")
+        console.print()
+        console.print("[red bold]× Invalid profile[/]")
+        _print_problems(console, exc.problems)
+        console.print()
         raise SystemExit(1)
+
     missing = profile.missing_env()
-    print(f"profile {profile.id}  hash={profile.hash}")
-    print(f"  model {profile.model.spec}  code_tool={profile.code_tool.name}")
-    print(f"  skills inline={profile.skills.inline}  deferred={profile.skills.deferred}")
+    env_rows = profile.env_status()
     if missing:
-        print("  missing required env:")
-        for name in missing:
-            print(f"    - {name}")
+        _print_validate_report(
+            profile, [], elapsed_s=time.perf_counter() - t0, ok=False, env_rows=env_rows
+        )
+        console.print("[red bold]× Missing required environment[/]")
+        _print_problems(
+            console,
+            [
+                f"{name} is not set (process env, secrets.env, or [env.defaults])"
+                for name in missing
+            ],
+        )
+        console.print()
         raise SystemExit(1)
+
     try:
         toolset, _ = plugins.load(profile)
-    except Exception as exc:
-        print(f"INVALID  tools: {exc}")
+    except PluginError as exc:
+        _print_validate_report(
+            profile, [], elapsed_s=time.perf_counter() - t0, ok=False, env_rows=env_rows
+        )
+        console.print("[red bold]× Tools failed to load[/]")
+        _print_problems(console, exc.problems)
+        console.print()
         raise SystemExit(1)
+    except Exception as exc:
+        _print_validate_report(
+            profile, [], elapsed_s=time.perf_counter() - t0, ok=False, env_rows=env_rows
+        )
+        console.print("[red bold]× Tools failed to load[/]")
+        _print_problems(console, [f"{type(exc).__name__}: {exc}"])
+        console.print()
+        raise SystemExit(1)
+
     names = sorted(toolset.tools)
-    print(f"  {len(names)} tools: {', '.join(names)}")
-    print("OK")
+    _print_validate_report(
+        profile, names, elapsed_s=time.perf_counter() - t0, env_rows=env_rows
+    )
 
 
 def cmd_env_list(args) -> None:

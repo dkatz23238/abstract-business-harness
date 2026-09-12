@@ -1,27 +1,40 @@
 # bizharness
 
-A long-horizon analysis agent **engine**. Domain logic — tools, skills,
-instructions, credentials — lives in a **profile directory** that you pass
-at runtime. The engine itself has no customer-specific knowledge and is
-safe to publish.
+A long-horizon **analysis agent engine**. Domain logic — tools, skills,
+instructions, credentials — lives in a **profile directory** you pass at
+runtime. This repository has no customer data and is meant to be public.
 
+It was first built for a large agro commodity producer: multi-hour analyses
+against an internal planning system, delivered as HTML reports. The engine
+is the reusable half of that design. How to write a profile like that one
+(lessons included, no confidential names or figures) is in
+[docs/authoring-profiles.md](docs/authoring-profiles.md).
+
+```bash
+uv sync
+uv run bizharness serve --profile profiles/example --port 8811
+# other terminal
+cd ui && npm install && VITE_API_URL=http://localhost:8811 npm run dev
 ```
-bizharness serve --profile /path/to/profile --port 8811
-```
+
+Open http://localhost:5173. The example profile uses pydantic-ai’s `test`
+model and a public JSON API — no API keys required.
 
 ## Layout
 
 ```
-bizharness/          engine (this package)
-profiles/example/    public demo profile (one dummy HTTP JSON tool)
+bizharness/          engine package (CLI: bizharness)
+profiles/example/    public demo profile
+docs/                authoring guide
 ui/                  AG-UI frontend; strings come from GET /profile
-data/                gitignored per-profile state (threads, memory, workspaces)
+data/                gitignored per-profile state
 ```
 
-A private profile is a separate git repo. Point `--profile` at it and
-`--data-root` at its `data/` if you want state stored next to the profile.
+A real customer profile is a **separate private git repo**. Point
+`--profile` at it and `--data-root` at its `data/` so threads stay next to
+the profile, not in this checkout.
 
-## Profile contract
+## Profile in one page
 
 ```
 profile.toml          model, code tool name, skills, tool modules, env, limits
@@ -32,14 +45,15 @@ tools/*.py            each may expose register(ctx) -> FunctionToolset
 ui.json               title, placeholder, data_calls_label, data_source_name
 ```
 
-Environment variables declared in `[env]` resolve as:
+Environment declared in `[env]` resolves as:
 
 1. `<PROFILE_ID>_<NAME>` in the process environment
 2. bare `<NAME>` in the process environment
 3. `<data-root>/<id>/secrets.env` (0600, gitignored)
 4. `[env.defaults]` in profile.toml
 
-Required names missing fail `bizharness profile validate`.
+`bizharness profile validate --profile PATH` prints a report and fails on
+missing required env or a broken tool module.
 
 ## CLI
 
@@ -55,13 +69,9 @@ bizharness profile new DIR [--from PATH]
 
 Admin HTTP (Bearer `HARNESS_ADMIN_TOKEN`): rewrite tools/skills/instructions,
 set env values, reload. Writes are validated before they land; previous files
-go to `profiles/<id>/_history/`.
+go to `_history/` under the profile. **Tools are trusted code** — same
+privileges as the engine process. Do not expose the admin token.
 
-## Web UI
+## License
 
-```
-cd ui && npm install && npm run dev
-```
-
-The UI reads `/profile` for the title and labels. Default API is
-`http://localhost:8811` (`VITE_API_URL`).
+MIT. See [LICENSE](LICENSE).
