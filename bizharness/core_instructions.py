@@ -148,7 +148,7 @@ Run a Python script with FULL CPython — the tool for analyzing
 data already saved in the workspace. pandas and the whole standard
 library are available; none of the {{ code_tool }} sandbox restrictions
 apply. The working directory is the workspace root, so files saved
-by {{ code_tool }} are right there (e.g. {{ data_file_example }}). print()
+by {{ code_tool }} are right there under data/. print()
 your findings — stdout is what you get back, so print COMPACT
 tables (grouped/rounded frames via to_string(), .head()), never a
 whole DataFrame or raw JSON: output above ~{{ spill_k }}k chars is spilled

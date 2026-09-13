@@ -43,7 +43,6 @@ TEMPLATE_VARS = (
     "data_tool_examples",  # a few real tool names, for the surfaces block
     "report_detail_hint",  # what the report's detail tables are about
     "report_extra_sections",  # extra sections every report must carry
-    "data_file_example",  # a plausible saved-payload path
     "spill_k",  # derived from [limits] spill_tokens
     "profile_name",
 )
@@ -52,7 +51,6 @@ _VAR_DEFAULTS = {
     "data_tool_examples": "",
     "report_detail_hint": "the detail",
     "report_extra_sections": "",
-    "data_file_example": "data/saved.json",
 }
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")

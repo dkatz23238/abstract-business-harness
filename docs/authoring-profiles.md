@@ -45,12 +45,12 @@ uv run bizharness serve --profile ~/my-profile --data-root ~/my-profile/data
 |---|---|
 | `[profile]` | `id`, `name`, `description` |
 | `[model]` | `spec` (e.g. `openai:gpt-5.6-luna` or `test`), `request_limit`, optional `[model.prices]` |
-| `[code_tool]` | **Rename** the sandbox tool after the data source. A generic `run_code` reads as “any Python here” and snippets drift into the restricted interpreter. Set `purpose`, `wall_clock_s`, `max_retries`. |
+| `[code_tool]` | **Rename** the sandbox tool after the data source. A generic `run_code` reads as “any Python here” and snippets drift into the restricted interpreter. `purpose` is optional; wall-clock and heap already have long-horizon defaults. |
 | `[skills]` | `inline` (always in the prompt) vs `deferred` (loaded with `load_capability` when needed) |
-| `[tools]` | `modules = ["client.py", "tools.py"]` — helpers without `register` are fine |
-| `[env]` | `required` / `optional` names plus `[env.defaults]` for non-secrets |
-| `[limits]` | spill / clamp / clear-tool-results, `analysis_timeout_s` |
-| `[instructions]` | strings substituted into `{{ placeholders }}` (`data_tool_examples`, `data_file_example`, …) |
+| `[tools]` | omit to load every `tools/*.py`; helpers without `register` are fine |
+| `[env]` | `optional` / `required` names to list in validate; put non-secret defaults in the tool client, not here |
+| `[limits]` | omit unless you need tighter spill / timeouts than the engine defaults |
+| `[instructions]` | only if `instructions.md` uses `{{ core.* }}` — filler for `data_tool_examples`, `report_detail_hint`, … |
 
 `ui.json` is what the web UI reads via `GET /profile`: `title`, `placeholder`, `hint`, `data_calls_label`, `data_source_name`.
 

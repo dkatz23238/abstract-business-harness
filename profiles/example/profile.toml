@@ -28,5 +28,4 @@ analysis_timeout_s = 60
 
 [instructions]
 data_tool_examples = "get_post, list_posts"
-data_file_example = "data/posts.json"
 report_detail_hint = "the fetched records"
