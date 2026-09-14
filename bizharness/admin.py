@@ -14,13 +14,37 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from . import plugins, profile as profile_mod
 from .profile import ProfileError, delete_secret, write_secret
 
 
 _ALLOWED_SKILL = "SKILL.md"
+_PREVIEW_CHARS = 240
+
+
+def _preview(text: str, n: int = _PREVIEW_CHARS) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= n:
+        return collapsed
+    cut = collapsed[: n + 1]
+    space = cut.rfind(" ")
+    snippet = cut[:space] if space > n // 2 else collapsed[:n]
+    return snippet.rstrip(".,;:—-") + "…"
+
+
+def _tools_payload(p) -> list[dict]:
+    rows = {row["name"]: row for row in plugins.inventory(p)}
+    if not p.tools_dir.exists():
+        return list(rows.values())
+    out = []
+    for path in sorted(p.tools_dir.glob("*.py")):
+        row = rows.get(path.name)
+        if row is None:
+            row = {"name": path.name, "functions": 0, "helper": True, "names": [], "entries": []}
+        out.append(row)
+    return out
 
 
 def _require_admin(request: Request, token: str | None) -> JSONResponse | None:
@@ -65,13 +89,34 @@ def mount(app: FastAPI, state) -> None:
         if err := _require_admin(request, state.engine.admin_token):
             return err
         p = state.profile
+        skills = []
+        if p.skills_dir.exists():
+            inline = set(p.skills.inline)
+            deferred = set(p.skills.deferred)
+            for folder in sorted(p.skills_dir.iterdir(), key=lambda s: s.name):
+                if not folder.is_dir():
+                    continue
+                if folder.name in inline:
+                    load = "inline"
+                elif folder.name in deferred:
+                    load = "deferred"
+                else:
+                    load = "unused"
+                skills.append({"name": folder.name, "load": load})
+        rendered = p.render(p.instructions_template, where="instructions.md")
         return {
             "id": p.id,
+            "name": p.name,
+            "description": p.description,
+            "model": p.model.spec,
+            "code_tool": p.code_tool.name,
             "hash": p.hash,
             "reload_key": p.reload_key,
             "toml": p.raw_toml,
-            "tools": sorted(f.name for f in p.tools_dir.glob("*.py")) if p.tools_dir.exists() else [],
-            "skills": [s.name for s in p.skills_dir.iterdir() if s.is_dir()] if p.skills_dir.exists() else [],
+            "instructions_preview": _preview(rendered),
+            "instructions_chars": len(rendered),
+            "tools": _tools_payload(p),
+            "skills": skills,
             "env": p.env_status(),
         }
 
@@ -81,6 +126,43 @@ def mount(app: FastAPI, state) -> None:
             return err
         p = state.reload_from_disk()
         return {"ok": True, "hash": p.hash}
+
+    @app.get("/admin/profile/profile.toml")
+    async def get_toml(request: Request):
+        return _get_text(request, state, "profile.toml")
+
+    @app.get("/admin/profile/instructions.md")
+    async def get_instructions(request: Request):
+        return _get_text(request, state, "instructions.md")
+
+    @app.post("/admin/profile/render-instructions")
+    async def render_instructions(request: Request):
+        if err := _require_admin(request, state.engine.admin_token):
+            return err
+        try:
+            text = (await request.body()).decode("utf-8")
+        except UnicodeDecodeError:
+            return JSONResponse({"detail": "body must be utf-8 text"}, status_code=400)
+        try:
+            rendered = state.profile.render(text, where="instructions.md")
+        except ProfileError as exc:
+            return JSONResponse(
+                {"detail": "render failed", "problems": list(exc.problems)},
+                status_code=422,
+            )
+        return PlainTextResponse(rendered)
+
+    @app.get("/admin/profile/tools/{name}")
+    async def get_tool(name: str, request: Request):
+        if not name.endswith(".py") or "/" in name or name.startswith("."):
+            return JSONResponse({"detail": "invalid tool name"}, status_code=400)
+        return _get_text(request, state, f"tools/{name}")
+
+    @app.get("/admin/profile/skills/{skill}/SKILL.md")
+    async def get_skill(skill: str, request: Request):
+        if "/" in skill or skill.startswith("."):
+            return JSONResponse({"detail": "invalid skill name"}, status_code=400)
+        return _get_text(request, state, f"skills/{skill}/{_ALLOWED_SKILL}")
 
     @app.put("/admin/profile/instructions.md")
     async def put_instructions(request: Request):
@@ -141,6 +223,15 @@ def mount(app: FastAPI, state) -> None:
         _audit(state.profile_path, f"env/{name}", b"(deleted)\n")
         state.reload_from_disk()
         return {"ok": True}
+
+
+def _get_text(request: Request, state, rel: str) -> JSONResponse | PlainTextResponse:
+    if err := _require_admin(request, state.engine.admin_token):
+        return err
+    path = state.profile_path / rel
+    if not path.is_file():
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return PlainTextResponse(path.read_text())
 
 
 async def _put_text(request: Request, state, rel: str) -> JSONResponse:

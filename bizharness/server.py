@@ -13,9 +13,10 @@ logged per thread so the timeline survives a refresh.
 
 Run with:  bizharness serve --profile PATH --port 8811
 
-Auth: if HARNESS_UI_TOKEN is set, every request must carry it as a
-`Authorization: Bearer <token>` header or `?token=` query parameter
+Auth: if HARNESS_UI_TOKEN is set, every request except `/admin/*` must carry
+it as a `Authorization: Bearer <token>` header or `?token=` query parameter
 (the latter so iframe/report links work). Unset = open local tool.
+`/admin/*` is gated separately by `HARNESS_ADMIN_TOKEN`.
 """
 
 from __future__ import annotations
@@ -88,11 +89,18 @@ class _TokenMiddleware:
     disconnects — one of the things that kept the server alive on Ctrl+C.
     """
 
-    def __init__(self, app, token: str | None):
+    def __init__(self, app, token: str | None, skip_prefixes: tuple[str, ...] = ()):
         self.app = app
         self.token = token
+        self.skip_prefixes = skip_prefixes
 
     async def __call__(self, scope, receive, send):
+        path = scope.get("path", "")
+        if self.skip_prefixes and any(
+            path == p or path.startswith(p.rstrip("/") + "/") for p in self.skip_prefixes
+        ):
+            await self.app(scope, receive, send)
+            return
         if self.token and scope["type"] == "http" and scope.get("method") != "OPTIONS":
             supplied = (
                 Headers(scope=scope).get("authorization", "").removeprefix("Bearer ").strip()
@@ -202,7 +210,7 @@ def create_app(
     app = FastAPI(title=f"{profile.name} AG-UI server", lifespan=_lifespan)
     app.state.harness = state
 
-    app.add_middleware(_TokenMiddleware, token=engine.ui_token)
+    app.add_middleware(_TokenMiddleware, token=engine.ui_token, skip_prefixes=("/admin",))
     app.add_middleware(
         CORSMiddleware,
         allow_origins=engine.ui_origins,

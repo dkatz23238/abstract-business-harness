@@ -20,6 +20,7 @@ trusted code, reviewed like any other part of the deployment.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import logging
 import sys
 from collections.abc import Callable, Iterable
@@ -31,6 +32,10 @@ from typing import Any
 from pydantic_ai.toolsets import FunctionToolset
 
 from .profile import Profile
+
+
+# Last successful (or partial) per-module tool inventory, keyed by profile id.
+_INVENTORY: dict[str, list[dict]] = {}
 
 
 class PluginError(Exception):
@@ -79,6 +84,7 @@ def _synthetic_package(profile: Profile) -> ModuleType:
 
 def unload(profile: Profile) -> None:
     """Drop cached modules so the next load re-reads the files from disk."""
+    _INVENTORY.pop(profile.id, None)
     prefix = _package_name(profile.id)
     for key in [k for k in sys.modules if k == prefix or k.startswith(prefix + ".")]:
         del sys.modules[key]
@@ -127,6 +133,80 @@ def _collect(result: Any, filename: str, target: FunctionToolset, problems: list
     )
 
 
+def _jsonish(value: Any) -> Any:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (str, int, float)):
+        return value
+    return repr(value)
+
+
+def _type_str(annotation: Any) -> str:
+    if annotation is inspect.Parameter.empty:
+        return ""
+    if isinstance(annotation, str):
+        return annotation
+    try:
+        return inspect.formatannotation(annotation)
+    except Exception:
+        return str(annotation)
+
+
+def _format_param(name: str, typ: str, optional: bool, default: Any) -> str:
+    piece = name if not typ else f"{name}: {typ}"
+    if not optional:
+        return piece
+    if default is None:
+        return f"{piece} = None"
+    if isinstance(default, bool):
+        return f"{piece} = {'True' if default else 'False'}"
+    if isinstance(default, str):
+        return f"{piece} = {default!r}"
+    return f"{piece} = {default}"
+
+
+def _function_entry(name: str, tool: Any) -> dict:
+    fn = getattr(tool, "function", None)
+    if fn is None:
+        return {"name": name, "params": [], "returns": "", "signature": f"{name}()"}
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return {"name": name, "params": [], "returns": "", "signature": f"{name}()"}
+
+    skip_ctx = bool(getattr(tool, "takes_ctx", False))
+    params: list[dict] = []
+    pieces: list[str] = []
+    for i, (pname, param) in enumerate(sig.parameters.items()):
+        if skip_ctx and i == 0:
+            continue
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        typ = _type_str(param.annotation)
+        optional = param.default is not param.empty
+        default = _jsonish(param.default) if optional else None
+        params.append({"name": pname, "type": typ, "optional": optional, "default": default})
+        pieces.append(_format_param(pname, typ, optional, default))
+    returns = _type_str(sig.return_annotation)
+    signature = f"{name}({', '.join(pieces)})"
+    if returns:
+        signature += f" -> {returns}"
+    return {"name": name, "params": params, "returns": returns, "signature": signature}
+
+
+def _empty_tool_row(filename: str, *, helper: bool, error: str | None = None) -> dict:
+    row: dict = {
+        "name": filename,
+        "functions": 0,
+        "helper": helper,
+        "names": [],
+        "entries": [],
+    }
+    if error:
+        row["error"] = error
+    return row
+
+
 def load(
     profile: Profile,
     *,
@@ -157,17 +237,39 @@ def load(
     )
     toolset = FunctionToolset(max_retries=1)
     problems: list[str] = []
+    inventory: list[dict] = []
     for filename in profile.tools.modules:
         module = _import_module(profile, filename)
         register: Callable | None = getattr(module, "register", None)
         if register is None:
+            inventory.append(_empty_tool_row(filename, helper=True))
             continue  # a shared helper module
+        before = set(toolset.tools)
         try:
             result = register(ctx)
         except Exception as exc:
             problems.append(f"tools/{filename}: register() raised {type(exc).__name__}: {exc}")
+            inventory.append(
+                _empty_tool_row(
+                    filename,
+                    helper=False,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            )
             continue
         _collect(result, filename, toolset, problems)
+        added = [name for name in toolset.tools if name not in before]
+        inventory.append(
+            {
+                "name": filename,
+                "functions": len(added),
+                "helper": False,
+                "names": added,
+                "entries": [_function_entry(n, toolset.tools[n]) for n in added],
+            }
+        )
+
+    _INVENTORY[profile.id] = inventory
 
     for name, tool in toolset.tools.items():
         if not (tool.description or (tool.function.__doc__ if tool.function else None)):
@@ -180,3 +282,26 @@ def load(
     if not toolset.tools:
         raise PluginError(["no tools registered: check tools.modules in profile.toml"])
     return toolset, ctx
+
+
+def inventory(profile: Profile) -> list[dict]:
+    """Per-module function counts from the last `load()` of this profile.
+
+    If nothing is cached, try a load (and still return whatever was recorded
+    if load raises PluginError).
+    """
+    cached = _INVENTORY.get(profile.id)
+    if cached is not None:
+        return cached
+    try:
+        load(profile)
+    except PluginError:
+        pass
+    if profile.id in _INVENTORY:
+        return _INVENTORY[profile.id]
+    if not profile.tools_dir.exists():
+        return []
+    return [
+        _empty_tool_row(f.name, helper=True)
+        for f in sorted(profile.tools_dir.glob("*.py"))
+    ]
