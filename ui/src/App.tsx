@@ -24,6 +24,9 @@ import {
 import Chat from "./components/Chat";
 import Threads from "./components/Threads";
 import Assets from "./components/Assets";
+import Admin from "./components/Admin";
+import Modal, { btnDanger, btnGhost } from "./components/Modal";
+import { redactEnabled } from "./redact";
 import "./App.css";
 
 /** Human-readable error text: unwrap Error objects, keep full detail. */
@@ -89,6 +92,8 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null);
 
   const [profile, setProfile] = useState<ProfileConfig | null>(null);
+  const [view, setView] = useState<"chat" | "admin">("chat");
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   useEffect(() => {
     fetchProfile()
@@ -277,7 +282,13 @@ export default function App() {
     // The server refuses anyway while a run is active; avoid the round-trip
     // for the common case (delete button on the currently-running thread).
     if (running && id === threadId) return;
-    if (!window.confirm("Delete this conversation, its tool history and workspace files?")) return;
+    setPendingDelete(id);
+  };
+
+  const confirmDeleteThread = async () => {
+    const id = pendingDelete;
+    if (!id) return;
+    setPendingDelete(null);
     try {
       await deleteThread(id);
     } catch (e) {
@@ -347,38 +358,66 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>{profile?.title ?? "Analysis Agent"}</h1>
-        <span className="thread">thread {threadId.slice(0, 8)}</span>
-        {activeModel && (
-          <span className="model-tag header" title={`Model: ${activeModel}`}>
-            {shortModelName(activeModel)}
+        {redactEnabled() && (
+          <span className="demo-redact" title="?redact=1 — figures in chat and reports are masked for display">
+            numbers hidden
           </span>
         )}
-        {feedSummary && (
-        <span
-          key={dataStats.calls}
-          className={`data-counter${dataStats.live > 0 ? " live" : ""}`}
-            title={`Individual ${profile?.data_source_name ?? "data"} API calls in this conversation, across ${dataStats.blocks.toLocaleString()} ${profile?.code_tool ?? "code"} block${dataStats.blocks === 1 ? "" : "s"}${dataStats.live > 0 ? ` — ${dataStats.live} running now` : ""}`}
+        {view === "chat" && (
+          <>
+            <span className="thread">thread {threadId.slice(0, 8)}</span>
+            {activeModel && (
+              <span className="model-tag header" title={`Model: ${activeModel}`}>
+                {shortModelName(activeModel)}
+              </span>
+            )}
+            {feedSummary && (
+            <span
+              key={dataStats.calls}
+              className={`data-counter${dataStats.live > 0 ? " live" : ""}`}
+                title={`Individual ${profile?.data_source_name ?? "data"} API calls in this conversation, across ${dataStats.blocks.toLocaleString()} ${profile?.code_tool ?? "code"} block${dataStats.blocks === 1 ? "" : "s"}${dataStats.live > 0 ? ` — ${dataStats.live} running now` : ""}`}
+              >
+                <span className="data-counter-value">{dataStats.calls.toLocaleString()}</span>
+                <span className="data-counter-label">{profile?.data_calls_label ?? "API calls"}</span>
+                {dataStats.live > 0 && <span className="data-counter-live">{dataStats.live} running</span>}
+              </span>
+            )}
+            {feedSummary && usage.requests > 0 && (
+              <span className="usage-counter" title={usageTitle(usage)}>
+                <span className="usage-part">
+                  <span className="usage-value">{fmtTokens(usage.inputTokens)}</span> in
+                </span>
+                <span className="usage-part">
+                  <span className="usage-value">{fmtTokens(usage.outputTokens)}</span> out
+                </span>
+                <span className="usage-part cost">
+                  {usage.costKnown ? `≈ ${fmtUsd(usage.costUsd)}` : "cost n/a"}
+                  {usage.estimatedRequests > 0 && <span className="usage-est">est.</span>}
+                </span>
+              </span>
+            )}
+          </>
+        )}
+        <nav className="header-nav">
+          <button
+            className={`ghost ${view === "chat" ? "active" : ""}`}
+            onClick={() => setView("chat")}
           >
-            <span className="data-counter-value">{dataStats.calls.toLocaleString()}</span>
-            <span className="data-counter-label">{profile?.data_calls_label ?? "API calls"}</span>
-            {dataStats.live > 0 && <span className="data-counter-live">{dataStats.live} running</span>}
-          </span>
-        )}
-        {feedSummary && usage.requests > 0 && (
-          <span className="usage-counter" title={usageTitle(usage)}>
-            <span className="usage-part">
-              <span className="usage-value">{fmtTokens(usage.inputTokens)}</span> in
-            </span>
-            <span className="usage-part">
-              <span className="usage-value">{fmtTokens(usage.outputTokens)}</span> out
-            </span>
-            <span className="usage-part cost">
-              {usage.costKnown ? `≈ ${fmtUsd(usage.costUsd)}` : "cost n/a"}
-              {usage.estimatedRequests > 0 && <span className="usage-est">est.</span>}
-            </span>
-          </span>
-        )}
+            Chat
+          </button>
+          <button
+            className={`ghost ${view === "admin" ? "active" : ""}`}
+            onClick={() => setView("admin")}
+          >
+            Admin
+          </button>
+        </nav>
       </header>
+      {view === "admin" ? (
+        <main className="layout admin-layout">
+          <Admin />
+        </main>
+      ) : (
       <main className="layout">
         <Threads
           threads={threads}
@@ -403,6 +442,24 @@ export default function App() {
           <Assets running={running} threadId={threadId} />
         </div>
       </main>
+      )}
+      <Modal
+        open={pendingDelete !== null}
+        title="Delete conversation?"
+        onClose={() => setPendingDelete(null)}
+        footer={
+          <>
+            <button type="button" className={btnGhost} onClick={() => setPendingDelete(null)}>
+              Cancel
+            </button>
+            <button type="button" className={btnDanger} onClick={confirmDeleteThread}>
+              Delete
+            </button>
+          </>
+        }
+      >
+        This removes the thread, its tool history, and workspace files.
+      </Modal>
     </div>
   );
 }

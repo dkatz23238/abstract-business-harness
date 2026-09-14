@@ -72,6 +72,11 @@ set env values, reload. Writes are validated before they land; previous files
 go to `_history/` under the profile. **Tools are trusted code** — same
 privileges as the engine process. Do not expose the admin token.
 
+The web UI has an **Admin** tab that talks to those endpoints. Unlock with
+the admin token (stored in this tab’s session storage, not in the Vite
+build). Unset `HARNESS_ADMIN_TOKEN` and `/admin` stays 404. `/admin` is
+not gated by `HARNESS_UI_TOKEN` — the two tokens are independent.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -1,4 +1,5 @@
 import { shortModelName, type ThreadSummary } from "../api";
+import { maybeRedact } from "../redact";
 
 interface Props {
   threads: ThreadSummary[];
@@ -28,10 +29,10 @@ export default function Threads({ threads, activeId, onSelect, onNew, onDelete }
             key={t.id}
             className={`thread-item ${t.id === activeId ? "active" : ""}`}
             onClick={() => onSelect(t.id)}
-            title={t.title}
+            title={maybeRedact(t.title)}
           >
             <div className="thread-item-main">
-              <span className="thread-title">{t.title || "(untitled)"}</span>
+              <span className="thread-title">{maybeRedact(t.title) || "(untitled)"}</span>
               <span className="thread-meta">
                 <span className="thread-when">{when(t.updated_at)}</span>
                 {t.model && (

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchWorkspaceFiles, rawFileUrl, type WorkspaceFile } from "../api";
+import { redactEnabled, redactHtml } from "../redact";
 
 interface Props {
   running: boolean;
@@ -15,6 +16,71 @@ function prettySize(bytes: number): string {
 function groupOf(path: string): string {
   const top = path.split("/")[0];
   return top === "reports" || top === "data" ? top : "other";
+}
+
+function HtmlPreview({
+  threadId,
+  path,
+  onClose,
+}: {
+  threadId: string;
+  path: string;
+  onClose: () => void;
+}) {
+  const redact = redactEnabled();
+  const raw = rawFileUrl(threadId, path);
+  const [html, setHtml] = useState<string | null>(null);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!redact) return;
+    let revoked = false;
+    let created: string | null = null;
+    fetch(raw)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
+      .then((text) => {
+        if (revoked) return;
+        const masked = redactHtml(text);
+        setHtml(masked);
+        created = URL.createObjectURL(new Blob([masked], { type: "text/html" }));
+        setBlobUrl(created);
+      })
+      .catch(() => {
+        if (!revoked) setHtml("<p>Could not load report.</p>");
+      });
+    return () => {
+      revoked = true;
+      if (created) URL.revokeObjectURL(created);
+    };
+  }, [redact, raw]);
+
+  const openHref = redact ? (blobUrl ?? raw) : raw;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <header>
+          <span>{path}</span>
+          <div>
+            <a href={openHref} target="_blank" rel="noreferrer">
+              Open in tab
+            </a>
+            <button className="ghost" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </header>
+        {redact ? (
+          <iframe srcDoc={html ?? ""} title={path} />
+        ) : (
+          <iframe src={raw} title={path} />
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function Assets({ running, threadId }: Props) {
@@ -58,15 +124,26 @@ export default function Assets({ running, threadId }: Props) {
                 <div className="group-title">{group}</div>
                 {groups[group].map((f) => (
                   <div key={f.path} className="asset-row">
-                    <a
-                      className="asset-name"
-                      href={rawFileUrl(threadId, f.path)}
-                      target="_blank"
-                      rel="noreferrer"
-                      title={f.path}
-                    >
-                      {f.path.split("/").slice(1).join("/") || f.path}
-                    </a>
+                    {redactEnabled() && f.kind === "html" ? (
+                      <button
+                        type="button"
+                        className="asset-name"
+                        title={f.path}
+                        onClick={() => setPreview(f.path)}
+                      >
+                        {f.path.split("/").slice(1).join("/") || f.path}
+                      </button>
+                    ) : (
+                      <a
+                        className="asset-name"
+                        href={rawFileUrl(threadId, f.path)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title={f.path}
+                      >
+                        {f.path.split("/").slice(1).join("/") || f.path}
+                      </a>
+                    )}
                     <span className="asset-meta">
                       {prettySize(f.size)} · {new Date(f.mtime * 1000).toLocaleTimeString()}
                     </span>
@@ -84,24 +161,7 @@ export default function Assets({ running, threadId }: Props) {
           <p className="hint">Files the agent saves (raw data, HTML reports) appear here.</p>
         )}
       </div>
-      {preview && (
-        <div className="modal-backdrop" onClick={() => setPreview(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <header>
-              <span>{preview}</span>
-              <div>
-                <a href={rawFileUrl(threadId, preview)} target="_blank" rel="noreferrer">
-                  Open in tab
-                </a>
-                <button className="ghost" onClick={() => setPreview(null)}>
-                  Close
-                </button>
-              </div>
-            </header>
-            <iframe src={rawFileUrl(threadId, preview)} title={preview} />
-          </div>
-        </div>
-      )}
+      {preview && <HtmlPreview threadId={threadId} path={preview} onClose={() => setPreview(null)} />}
     </section>
   );
 }

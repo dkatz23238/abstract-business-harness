@@ -70,7 +70,7 @@ def register(ctx) -> FunctionToolset:
 
 `ctx.env` is the resolved `[env]` map; `ctx.require("API_KEY")` fails clearly if missing. Values are also injected into `os.environ` before import, so a client that already reads the environment ports with little change.
 
-Put credentials in `[env]`, not in the prompt and not in git. Use `required` only for names that really must be present. If the client accepts several auth modes (API key *or* username/password), leave them `optional` and fail in `register()` when none of the modes is complete — a single required key will reject the other valid modes. The admin API can set values (`PUT /admin/profile/env/{NAME}`) into `<data-root>/<id>/secrets.env` (mode 0600). That store is convenience, not a vault — treat the host as trusted.
+Put credentials in `[env]`, not in the prompt and not in git. Use `required` only for names that really must be present. If the client accepts several auth modes (API key *or* username/password), leave them `optional` and fail in `register()` when none of the modes is complete — a single required key will reject the other valid modes. The admin API can set values (`PUT /admin/profile/env/{NAME}`) into `<data-root>/<id>/secrets.env` (mode 0600). That store is convenience, not a vault — treat the host as trusted. The web UI’s Admin tab is the same surface: unlock with `HARNESS_ADMIN_TOKEN`, edit files, set env (values never displayed), reload.
 
 ## Instructions
 

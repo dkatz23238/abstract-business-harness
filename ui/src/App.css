@@ -1,3 +1,31 @@
+@import "@fontsource-variable/ibm-plex-sans/wght.css";
+@import "@fontsource-variable/ibm-plex-sans/wght-italic.css";
+@import "@fontsource/ibm-plex-mono/latin-400.css";
+@import "@fontsource/ibm-plex-mono/latin-500.css";
+
+/* Tailwind utilities only — skip preflight so the existing chat CSS stays intact. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css";
+
+@theme {
+  --color-bg: #f3f7f4;
+  --color-pane: #ffffff;
+  --color-line: #dde7df;
+  --color-line-strong: #c9d8cd;
+  --color-ink: #182620;
+  --color-muted: #647a6c;
+  --color-accent: #1f7a4d;
+  --color-accent-strong: #176540;
+  --color-accent-soft: #e7f3ea;
+  --color-accent-soft-2: #f1f8f3;
+  --color-code: #f5f8f5;
+  --color-danger: #b4231b;
+  --color-danger-soft: #fdecea;
+  --color-danger-border: #f2c4bf;
+  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 :root {
   /* Green & white. Surfaces are white on a faintly green-tinted canvas;
      one forest-green accent carries actions, focus and progress. */
@@ -21,6 +49,8 @@
   --danger-border: #f2c4bf;
   --shadow: 0 1px 2px rgba(24, 38, 32, 0.05), 0 2px 8px rgba(24, 38, 32, 0.04);
   --radius: 10px;
+  --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   color-scheme: light;
   font-size: 18px;
 }
@@ -33,7 +63,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -58,7 +88,7 @@ a {
 
 .app-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 12px;
   padding: 12px 20px;
   background: var(--pane);
@@ -89,7 +119,7 @@ a {
 .thread {
   color: var(--muted);
   font-size: 14px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .error-banner {
@@ -119,7 +149,7 @@ a {
   margin: 0;
   padding: 10px 12px;
   color: #7a1c15;
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -236,7 +266,7 @@ a {
 
 /* model badge: sidebar rows and the header */
 .model-tag {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
   color: var(--accent);
@@ -251,6 +281,18 @@ a {
 .model-tag.header {
   font-size: 13px;
   align-self: center;
+}
+
+.demo-redact {
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  padding: 2px 8px;
+  align-self: center;
+  white-space: nowrap;
 }
 
 /* header banner: individual data-source calls made in this thread so far */
@@ -274,7 +316,7 @@ a {
 }
 
 .data-counter-value {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 20px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -310,7 +352,7 @@ a {
 }
 
 .usage-value {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 600;
   color: var(--text);
@@ -320,7 +362,7 @@ a {
 }
 
 .usage-part.cost {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 15px;
   font-weight: 600;
   color: var(--accent-strong);
@@ -872,6 +914,12 @@ button.ghost:hover {
   color: #8a3b0c;
 }
 
+/* Prism names TOML section titles `table`. Tailwind's .table utility is
+   display:table, which forces [ and ] onto their own lines. */
+.token.table {
+  display: inline;
+}
+
 .token.regex,
 .token.important,
 .token.variable {
@@ -907,7 +955,7 @@ button.ghost:hover {
 }
 
 .tool-name {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 16px;
 }
 
@@ -1008,6 +1056,15 @@ button.ghost:hover {
   color: var(--accent);
 }
 
+button.asset-name {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .asset-meta {
   color: var(--muted);
   font-size: 13px;
@@ -1056,4 +1113,130 @@ button.ghost:hover {
   flex: 1;
   border: none;
   background: white;
+}
+
+.header-nav {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.header-nav button.ghost.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.layout.admin-layout {
+  grid-template-columns: 1fr;
+}
+
+/* Markdown preview (react-markdown) in the admin panel. */
+.md-body {
+  width: 100%;
+  line-height: 1.65;
+  color: var(--text);
+}
+
+.md-body > :first-child {
+  margin-top: 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3 {
+  margin: 1.15em 0 0.4em;
+  line-height: 1.3;
+  font-weight: 650;
+}
+
+.md-body h1 {
+  font-size: 1.4em;
+}
+
+.md-body h2 {
+  font-size: 1.2em;
+}
+
+.md-body h3 {
+  font-size: 1.05em;
+}
+
+.md-body p,
+.md-body ul,
+.md-body ol {
+  margin: 0.7em 0;
+}
+
+.md-body ul,
+.md-body ol {
+  padding-left: 1.3em;
+}
+
+.md-body hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.4em 0;
+}
+
+.md-body blockquote {
+  margin: 0.8em 0;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+
+.md-body code {
+  font-size: 0.9em;
+  background: var(--code);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+}
+
+.md-body pre {
+  overflow-x: auto;
+  background: var(--code);
+  border: 1px solid var(--border);
+  padding: 10px 12px;
+  border-radius: 8px;
+}
+
+.md-body pre code {
+  background: none;
+  padding: 0;
+}
+
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
+.md-body td,
+.md-body th {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-body th {
+  background: var(--accent-soft-2);
+  font-weight: 650;
+}
+
+.md-body td:first-child,
+.md-body th:first-child {
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.md-body tbody tr:nth-child(even) td {
+  background: var(--accent-soft-2);
 }

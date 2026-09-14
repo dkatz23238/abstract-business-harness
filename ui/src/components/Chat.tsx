@@ -14,29 +14,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@ag-ui/client";
-import ReactMarkdown, { type Components } from "react-markdown";
 import type { ToolActivity } from "../api";
+import { maybeRedact, redactEnabled } from "../redact";
 import CodeBlock from "./CodeBlock";
-
-/** Fenced code blocks in assistant markdown get highlighted (```python,
- *  ```json, …); inline `code` is left to the default renderer. */
-const MARKDOWN_COMPONENTS: Components = {
-  pre: ({ children }) => <>{children}</>,
-  code: ({ className, children, ...rest }) => {
-    const match = /language-(\w+)/.exec(className ?? "");
-    const text = String(children ?? "").replace(/\n$/, "");
-    // Fenced blocks arrive wrapped in <pre> (we unwrap above) and are the
-    // only ones with a language class or a newline in them.
-    if (match || text.includes("\n")) {
-      return <CodeBlock code={text} language={match?.[1] ?? "auto"} format={match?.[1] === "json"} />;
-    }
-    return (
-      <code className={className} {...rest}>
-        {children}
-      </code>
-    );
-  },
-};
+import Markdown from "./Markdown";
 
 interface Props {
   messages: readonly Message[];
@@ -385,20 +366,22 @@ function NestedRow({ activity, parentDone }: { activity: ToolActivity; parentDon
       {open && (
         <div className="tool-body">
           {activity.code ? (
-            <CodeBlock className="code" language="python" code={activity.code} />
+            <CodeBlock className="code" language="python" code={activity.code} redact={redactEnabled()} />
           ) : (
-            activity.args && <CodeBlock className="args" language="json" format code={activity.args} />
+            activity.args && (
+              <CodeBlock className="args" language="json" format code={activity.args} redact={redactEnabled()} />
+            )
           )}
           {activity.error && (
             <>
               <div className="label">error</div>
-              <pre className="result error">{activity.error}</pre>
+              <pre className="result error">{maybeRedact(activity.error)}</pre>
             </>
           )}
           {activity.result && (
             <>
               <div className="label">result</div>
-              <CodeBlock className="result" format code={activity.result} />
+              <CodeBlock className="result" format code={activity.result} redact={redactEnabled()} />
             </>
           )}
         </div>
@@ -469,10 +452,12 @@ function ToolCard({
                 <span className="chevron">{showCode ? "▾" : "▸"}</span> code
                 <span className="code-lines">{code.split("\n").length} lines</span>
               </button>
-              {showCode && <CodeBlock className="code" language="python" code={code} />}
+              {showCode && (
+                <CodeBlock className="code" language="python" code={code} redact={redactEnabled()} />
+              )}
             </div>
           ) : (
-            args && <CodeBlock className="args" language="json" format code={args} />
+            args && <CodeBlock className="args" language="json" format code={args} redact={redactEnabled()} />
           )}
           {errorText && (
             <>
@@ -483,13 +468,13 @@ function ToolCard({
                   agent had to re-run it.
                 </div>
               )}
-              <pre className="result error">{errorText}</pre>
+              <pre className="result error">{maybeRedact(errorText)}</pre>
             </>
           )}
           {resultText && (
             <>
               <div className="label">result</div>
-              <CodeBlock className="result" format code={resultText} />
+              <CodeBlock className="result" format code={resultText} redact={redactEnabled()} />
             </>
           )}
         </div>
@@ -524,7 +509,7 @@ function PlanCard({ tasks }: { tasks: PlanTask[] }) {
           <li key={t.id} className={`plan-task ${t.status}`}>
             <span className="plan-icon">{PLAN_ICONS[t.status] ?? "○"}</span>
             <span className="plan-text">
-              {t.status === "in_progress" && t.activeForm ? t.activeForm : t.content}
+              {maybeRedact(t.status === "in_progress" && t.activeForm ? t.activeForm : t.content)}
             </span>
           </li>
         ))}
@@ -630,15 +615,15 @@ export default function Chat({
             return (
               <div key={item.key} className={`bubble ${item.role}`}>
                 {item.role === "assistant" ? (
-                  <ReactMarkdown components={MARKDOWN_COMPONENTS}>{item.text}</ReactMarkdown>
+                  <Markdown>{maybeRedact(item.text)}</Markdown>
                 ) : (
-                  <p>{item.text}</p>
+                  <p>{maybeRedact(item.text)}</p>
                 )}
               </div>
             );
           }
           if (item.kind === "reasoning") {
-            return <Reasoning key={item.key} text={item.text} live={item.live} />;
+            return <Reasoning key={item.key} text={maybeRedact(item.text)} live={item.live} />;
           }
           if (item.kind === "plan") {
             return <PlanCard key={item.key} tasks={item.tasks} />;
@@ -667,7 +652,7 @@ export default function Chat({
           </div>
         )}
         {running && !liveReasoning && <div className="bubble assistant thinking">Working…</div>}
-        {error && <ErrorBanner text={error} onDismiss={onDismissError} />}
+        {error && <ErrorBanner text={maybeRedact(error)} onDismiss={onDismissError} />}
         <div ref={bottomRef} />
       </div>
       <footer className="chat-input">
