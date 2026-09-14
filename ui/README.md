@@ -9,4 +9,5 @@ npm install
 npm run dev
 ```
 
-Point `VITE_API_URL` at the engine (default `http://localhost:8811`).
+Point `VITE_API_URL` at the engine (default `http://localhost:8811`). In
+dev the browser calls same-origin paths; Vite proxies them to that origin.

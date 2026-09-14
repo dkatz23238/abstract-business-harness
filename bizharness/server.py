@@ -35,6 +35,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import ValidationError
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_ai.usage import UsageLimits
 from starlette.datastructures import Headers, QueryParams
@@ -176,6 +177,27 @@ class AppState:
             return self.agents[key]
 
 
+def _run_error_from_sse(chunk: str) -> str | None:
+    """Pull a RUN_ERROR message out of an encoded AG-UI SSE chunk, if any.
+
+    The adapter emits model/provider failures as protocol events rather than
+    raising, so the HTTP stream is still 200. Without this, `run.finish()`
+    would record success and the UI would show a blank turn.
+    """
+    if "RUN_ERROR" not in chunk:
+        return None
+    for line in chunk.splitlines():
+        if not line.startswith("data:"):
+            continue
+        try:
+            data = json.loads(line[5:].lstrip())
+        except ValueError:
+            continue
+        if data.get("type") == "RUN_ERROR" and data.get("message"):
+            return str(data["message"])
+    return None
+
+
 def _encode_error_event(message: str) -> str:
     try:
         from ag_ui.core import EventType, RunErrorEvent
@@ -253,7 +275,10 @@ def create_app(
         except Exception:
             thread_id = "default"
         built = await state.agent_for(thread_id)
-        adapter = await AGUIAdapter.from_request(request, agent=built.agent)
+        try:
+            adapter = await AGUIAdapter.from_request(request, agent=built.agent)
+        except ValidationError as exc:
+            return JSONResponse({"detail": json.loads(exc.json())}, status_code=422)
         bridge = NestedCallBridge(thread_id, data_tools=built.data_tools)
         meter = UsageMeter(
             state.threads_dir,
@@ -279,6 +304,8 @@ def create_app(
                 )
                 async for chunk in adapter.encode_stream(events):
                     run.append(chunk)
+                    if error is None:
+                        error = _run_error_from_sse(chunk)
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 run.append(_encode_error_event(error))

@@ -17,8 +17,11 @@ uv run bizharness serve --profile profiles/example --port 8811
 cd ui && npm install && VITE_API_URL=http://localhost:8811 npm run dev
 ```
 
-Open http://localhost:5173. The example profile uses pydantic-ai’s `test`
-model and a public JSON API — no API keys required.
+Open the Vite URL (5173, or 5174+ if that port is taken). The UI proxies
+`/agui`, `/profile`, and the other engine routes to `VITE_API_URL`, so a
+second Vite on another localhost port does not need CORS. The example
+profile talks to a public JSON API and uses `openai:gpt-5.6-luna` (needs
+`OPENAI_API_KEY`). For a no-key smoke test, set `[model] spec = "test"`.
 
 ## Layout
 

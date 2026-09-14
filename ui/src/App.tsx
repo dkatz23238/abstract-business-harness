@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Message } from "@ag-ui/client";
+import type { AgentSubscriber, Message } from "@ag-ui/client";
 import {
   activateThread,
   agent,
@@ -33,6 +33,17 @@ import "./App.css";
 function errText(e: unknown): string {
   if (e instanceof Error) return e.message || String(e);
   return String(e);
+}
+
+/** HttpAgent treats a protocol RUN_ERROR as a finished stream, not a thrown
+ *  fetch failure — so the chat pane has to listen for it or the turn looks empty. */
+function liveSubscriber(onMessages: () => void, onError: (message: string) => void): AgentSubscriber {
+  return {
+    onEvent: () => onMessages(),
+    onRunErrorEvent: ({ event }) => {
+      if (event.message) onError(event.message);
+    },
+  };
 }
 
 function fmtTokens(n: number): string {
@@ -189,11 +200,12 @@ export default function App() {
       abandonedRef.current.delete(id);
       setRunning(true);
       try {
-        await attachToRun({
-          onEvent: () => {
-            setMessages([...agent.messages]);
-          },
-        });
+        await attachToRun(
+          liveSubscriber(
+            () => setMessages([...agent.messages]),
+            (msg) => setRunError(msg),
+          ),
+        );
         if (abandonedRef.current.has(id)) return;
         if (agent.threadId === id) {
           setMessages([...agent.messages]);
@@ -330,11 +342,13 @@ export default function App() {
     };
 
     try {
-      await agent.runAgent(undefined, {
-        onEvent: () => {
-          setMessages([...agent.messages]);
-        },
-      });
+      await agent.runAgent(
+        undefined,
+        liveSubscriber(
+          () => setMessages([...agent.messages]),
+          (msg) => setRunError(msg),
+        ),
+      );
       // The user navigated away mid-run: the aborted local stream is not
       // the run finishing. The thread re-attaches when they come back.
       if (abandonedRef.current.has(id)) return;

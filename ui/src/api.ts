@@ -1,7 +1,12 @@
 // Server endpoints and helpers shared by the panes.
 
-export const API_URL: string =
-  (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8811";
+/** Same-origin during `vite`/`vite preview` so any localhost UI port works
+ *  without CORS. `VITE_API_URL` is the proxy *target* (see vite.config.ts).
+ *  Production builds that are not served through Vite still use it as an
+ *  absolute origin. */
+export const API_URL: string = import.meta.env.DEV
+  ? ""
+  : ((import.meta.env.VITE_API_URL as string | undefined) ?? "");
 
 export interface ProfileConfig {
   id: string;

@@ -68,6 +68,12 @@ from .history import SessionHistory
 from .profile import Profile
 
 
+# Chat Completions (`openai-chat:` / a bare `openai:` string) cannot mix this
+# model's reasoning with function tools. The engine always has tools, so every
+# OpenAI-shaped spec is built as the Responses API.
+_OPENAI_SPEC_PREFIXES = ("openai-chat:", "openai-responses:", "openai:")
+
+
 def _reasoning_model(model_spec: str):
     """Model + settings that surface the model's reasoning as ThinkingParts.
 
@@ -77,16 +83,17 @@ def _reasoning_model(model_spec: str):
     which the AG-UI adapter forwards to the frontend as THINKING events and
     the CLI trace prints. Non-OpenAI specs pass through unchanged.
     """
-    if model_spec.startswith("openai:"):
-        from pydantic_ai.models.openai import (
-            OpenAIResponsesModel,
-            OpenAIResponsesModelSettings,
-        )
+    for prefix in _OPENAI_SPEC_PREFIXES:
+        if model_spec.startswith(prefix):
+            from pydantic_ai.models.openai import (
+                OpenAIResponsesModel,
+                OpenAIResponsesModelSettings,
+            )
 
-        return (
-            OpenAIResponsesModel(model_spec.removeprefix("openai:")),
-            OpenAIResponsesModelSettings(openai_reasoning_summary="detailed"),
-        )
+            return (
+                OpenAIResponsesModel(model_spec.removeprefix(prefix)),
+                OpenAIResponsesModelSettings(openai_reasoning_summary="detailed"),
+            )
     return model_spec, None
 
 

@@ -4,9 +4,7 @@ name = "Example Agent"
 description = "Public demo profile: one dummy HTTP JSON tool"
 
 [model]
-spec = "test"
-request_limit = 20
-retries = 2
+spec = "openai:gpt-5.6-luna"
 
 [code_tool]
 name = "data_code"
