@@ -1,5 +1,7 @@
 # bizharness
 
+![logo](imgs/abh.png)
+
 A long-horizon **analysis agent engine**. Domain logic — tools, skills,
 instructions, credentials — lives in a **profile directory** you pass at
 runtime. This repository has no customer data and is meant to be public.
