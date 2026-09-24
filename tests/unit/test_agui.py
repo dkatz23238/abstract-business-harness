@@ -106,6 +106,32 @@ def test_thread_effort_round_trip(tmp_path, monkeypatch):
     assert match["effort"] == "high"
 
 
+def test_built_ui_is_served_and_api_still_wins(tmp_path, monkeypatch):
+    ui = tmp_path / "ui"
+    (ui / "assets").mkdir(parents=True)
+    (ui / "index.html").write_text("<!doctype html><title>served-ui</title>")
+    (ui / "assets" / "app.js").write_text("console.log(1)")
+    (ui / "favicon.svg").write_text("<svg></svg>")
+
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    dest = tmp_path / "profile"
+    shutil.copytree(EXAMPLE, dest)
+    settings = EngineSettings(data_root=tmp_path / "data", ui_token="secret", ui_dir=ui)
+    profile = load(dest, settings=settings)
+    client = TestClient(create_app(profile, engine=settings, profile_path=dest))
+
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "served-ui" in page.text
+    assert client.get("/assets/app.js").status_code == 200
+    assert client.get("/favicon.svg").status_code == 200
+    # The shell is public; the API stays behind the UI token.
+    assert client.get("/profile").status_code == 401
+    assert client.get("/profile", headers={"Authorization": "Bearer secret"}).status_code == 200
+    assert client.get("/missing").status_code == 401
+
+
 def test_agui_run_applies_forwarded_effort(tmp_path, monkeypatch):
     from pydantic_ai.ui.ag_ui import AGUIAdapter
 

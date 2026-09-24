@@ -335,7 +335,31 @@ def _read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def _resolve_env(profile_id: str, spec: EnvSpec, secrets_file: Path) -> dict[str, str]:
+def _relocate_missing_path(value: str, profile_path: Path) -> str:
+    """Point a missing absolute path at the same filename beside the profile.
+
+    Profiles often store host paths (`/home/someone/tree/file.sqlite`). A
+    container mounts that tree at one directory; the filename next to the
+    profile, or in the profile itself, is the same file.
+    """
+    if not value.startswith("/"):
+        return value
+    original = Path(value)
+    if original.exists():
+        return value
+    name = original.name
+    if not name or name in (".", ".."):
+        return value
+    for root in (profile_path, profile_path.parent):
+        found = root / name
+        if found.exists():
+            return str(found)
+    return value
+
+
+def _resolve_env(
+    profile_id: str, spec: EnvSpec, secrets_file: Path, profile_path: Path
+) -> dict[str, str]:
     """Process environment wins, then the profile's secrets file, then defaults.
 
     The scoped form (`<PROFILE_ID>_<NAME>`) is checked before the bare name
@@ -352,7 +376,7 @@ def _resolve_env(profile_id: str, spec: EnvSpec, secrets_file: Path) -> dict[str
             or spec.defaults.get(name)
             or ""
         )
-        resolved[name] = str(value)
+        resolved[name] = _relocate_missing_path(str(value), profile_path)
     return resolved
 
 
@@ -549,7 +573,7 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
     }
 
     data_dir = settings.profile_data_dir(profile_id)
-    env = _resolve_env(profile_id, env_spec, data_dir / _SECRETS_FILE)
+    env = _resolve_env(profile_id, env_spec, data_dir / _SECRETS_FILE, path)
 
     profile = Profile(
         id=profile_id,

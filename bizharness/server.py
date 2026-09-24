@@ -13,10 +13,14 @@ logged per thread so the timeline survives a refresh.
 
 Run with:  bizharness serve --profile PATH --port 8811
 
-Auth: if HARNESS_UI_TOKEN is set, every request except `/admin/*` must carry
-it as a `Authorization: Bearer <token>` header or `?token=` query parameter
-(the latter so iframe/report links work). Unset = open local tool.
-`/admin/*` is gated separately by `HARNESS_ADMIN_TOKEN`.
+Auth: if HARNESS_UI_TOKEN is set, every request except `/admin/*` and the
+built UI files must carry it as a `Authorization: Bearer <token>` header
+or `?token=` query parameter (the latter so iframe/report links work).
+Unset = open local tool. `/admin/*` is gated separately by
+`HARNESS_ADMIN_TOKEN`.
+
+When `ui/dist` (or `HARNESS_UI_DIR`) contains `index.html`, that build is
+served on `/` by the same process. API routes stay on their own paths.
 """
 
 from __future__ import annotations
@@ -91,13 +95,44 @@ class _TokenMiddleware:
     disconnects — one of the things that kept the server alive on Ctrl+C.
     """
 
-    def __init__(self, app, token: str | None, skip_prefixes: tuple[str, ...] = ()):
+    def __init__(
+        self,
+        app,
+        token: str | None,
+        skip_prefixes: tuple[str, ...] = (),
+        ui_dir: Path | None = None,
+    ):
         self.app = app
         self.token = token
         self.skip_prefixes = skip_prefixes
+        self.ui_dir = ui_dir
+
+    def _ui_asset(self, path: str) -> bool:
+        """GET/HEAD of the built UI. API paths are not files in that directory."""
+        if self.ui_dir is None:
+            return False
+        if path in ("/", "/index.html"):
+            return True
+        rel = path.lstrip("/")
+        if not rel or ".." in Path(rel).parts:
+            return False
+        candidate = (self.ui_dir / rel).resolve()
+        try:
+            candidate.relative_to(self.ui_dir)
+        except ValueError:
+            return False
+        return candidate.is_file()
 
     async def __call__(self, scope, receive, send):
         path = scope.get("path", "")
+        if (
+            self.ui_dir is not None
+            and scope.get("type") == "http"
+            and scope.get("method") in ("GET", "HEAD")
+            and self._ui_asset(path)
+        ):
+            await self.app(scope, receive, send)
+            return
         if self.skip_prefixes and any(
             path == p or path.startswith(p.rstrip("/") + "/") for p in self.skip_prefixes
         ):
@@ -239,8 +274,14 @@ def create_app(
     state = AppState(profile, engine, profile_path or profile.path)
     app = FastAPI(title=f"{profile.name} AG-UI server", lifespan=_lifespan)
     app.state.harness = state
+    ui_root = _usable_ui_dir(engine.ui_dir)
 
-    app.add_middleware(_TokenMiddleware, token=engine.ui_token, skip_prefixes=("/admin",))
+    app.add_middleware(
+        _TokenMiddleware,
+        token=engine.ui_token,
+        skip_prefixes=("/admin",),
+        ui_dir=ui_root,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=engine.ui_origins,
@@ -495,7 +536,23 @@ def create_app(
         StaticFiles(directory=str(state.workspaces_root)),
         name="workspaces",
     )
+    # Mounted last. A mount at "/" matches every path, so it has to come
+    # after the API routes, which then win on a full match.
+    if ui_root is not None:
+        app.mount("/", StaticFiles(directory=str(ui_root), html=True), name="ui")
     return app
+
+
+def _usable_ui_dir(ui_dir: Path | None) -> Path | None:
+    """Resolved UI build directory, or None when there is nothing to serve."""
+    if ui_dir is None:
+        return None
+    root = Path(ui_dir).expanduser().resolve()
+    if not (root / "index.html").is_file():
+        print(f"[bizharness] UI dir {root} has no index.html; serving API only", file=sys.stderr)
+        return None
+    print(f"[bizharness] ui={root}")
+    return root
 
 
 # Default module-level app for `uvicorn bizharness.server:app` when

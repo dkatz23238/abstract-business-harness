@@ -53,6 +53,22 @@ def test_missing_toml_is_a_profile_error(tmp_path):
         load(tmp_path)
 
 
+def test_missing_absolute_path_follows_the_file_next_to_the_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "state"))
+    tree = tmp_path / "tree"
+    dest = tree / "profile"
+    shutil.copytree(EXAMPLE, dest)
+    (tree / "notes.sqlite").write_bytes(b"")
+    text = (dest / "profile.toml").read_text().replace(
+        'JSON_API_BASE = "https://jsonplaceholder.typicode.com"',
+        'JSON_API_BASE = "https://jsonplaceholder.typicode.com"\n'
+        'NOTES = "/home/someone/tree/notes.sqlite"',
+    )
+    (dest / "profile.toml").write_text(text)
+    profile = load(dest)
+    assert profile.env["NOTES"] == str(tree / "notes.sqlite")
+
+
 def test_hash_changes_when_instructions_change(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path))
     dest = tmp_path / "copy"

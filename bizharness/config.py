@@ -15,6 +15,8 @@ Environment:
                         profile (independent of HARNESS_UI_TOKEN).
                         Unset = admin API disabled entirely.
   HARNESS_UI_ORIGINS    comma-separated CORS origins for the web UI.
+  HARNESS_UI_DIR        built web UI (index.html). Default: <repo>/ui/dist
+                        when that build exists; unset means API only.
   LOGFIRE_TOKEN         optional live tracing.
 """
 
@@ -43,6 +45,22 @@ def load_dotenv(path: Path) -> None:
 load_dotenv(REPO_DIR / ".env")
 
 
+def ui_dir_from_env() -> Path | None:
+    """Directory of a production UI build, or None when the API is alone.
+
+    `HARNESS_UI_DIR` wins. Otherwise `<repo>/ui/dist` is used when it
+    already contains `index.html` (a local `npm run build`).
+    """
+    raw = os.environ.get("HARNESS_UI_DIR")
+    if raw is not None:
+        text = raw.strip()
+        return Path(text).expanduser() if text else None
+    candidate = REPO_DIR / "ui" / "dist"
+    if (candidate / "index.html").is_file():
+        return candidate
+    return None
+
+
 @dataclass
 class EngineSettings:
     data_root: Path = field(
@@ -64,6 +82,7 @@ class EngineSettings:
             if o.strip()
         ]
     )
+    ui_dir: Path | None = field(default_factory=ui_dir_from_env)
 
     def profile_data_dir(self, profile_id: str) -> Path:
         return self.data_root / profile_id

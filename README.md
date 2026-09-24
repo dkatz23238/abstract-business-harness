@@ -25,6 +25,32 @@ second Vite on another localhost port does not need CORS. The example
 profile talks to a public JSON API and uses `openai:gpt-5.6-luna` (needs
 `OPENAI_API_KEY`). For a no-key smoke test, set `[model] spec = "test"`.
 
+A production build of the UI is served by the same process. `npm run build`
+in `ui/` (with `VITE_API_URL` empty) writes `ui/dist`, and `bizharness serve`
+then returns that app at `/`. Set `HARNESS_UI_DIR` to point somewhere else.
+
+## Docker
+
+The image contains the engine and that UI build. The profile and its state
+stay on the host:
+
+```bash
+docker build -t bizharness .
+docker run --rm -p 8811:8811 \
+  -e OPENAI_API_KEY \
+  -e HARNESS_ADMIN_TOKEN \
+  -v "$HOME/eia-profile:/harness-profile" \
+  bizharness
+```
+
+Open `http://localhost:8811`. The image reads one mount, `/harness-profile`.
+A `profile.toml` there is the profile; otherwise `profile/profile.toml` is.
+State goes to `harness-data/` when that directory exists, otherwise `data/`.
+An env value that is an absolute path to a missing file is reread from the
+same filename in the mount, so host paths stored in `profile.toml` still
+find the databases next to the profile. `LOGFIRE_TOKEN` and
+`HARNESS_UI_TOKEN` are optional. The mount has to be writable by uid 1000.
+
 ## Layout
 
 ```
