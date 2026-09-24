@@ -424,7 +424,9 @@ def create_app(
         queue = await hub.subscribe(thread_id)
         history = hub.replay(thread_id)
         summary = hub.summary(thread_id)
-        summary["usage"] = usage_summary(state.threads_dir, thread_id)
+        summary["usage"] = usage_summary(
+            state.threads_dir, thread_id, overrides=state.profile.model.prices
+        )
 
         async def stream():
             try:

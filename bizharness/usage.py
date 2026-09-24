@@ -47,6 +47,42 @@ def _provider(model: str) -> str | None:
     return model.split(":", 1)[0] if ":" in model else None
 
 
+# List prices genai-prices does not ship yet, in USD per million tokens.
+# GPT-6 Luna (OpenAI standard tier): $0.10 input, $0.01 cached input, $0.50
+# output. A request over 272K input tokens is billed at 2× input and cache
+# and 1.5× output for the whole request.
+_BUILTIN_PRICES: dict[str, dict[str, float]] = {
+    "gpt-6-luna": {"input": 0.10, "cache_read": 0.01, "output": 0.50},
+}
+_LONG_CONTEXT_TOKENS = 272_000
+
+
+def _builtin_rates(name: str) -> dict[str, float] | None:
+    for key, rates in _BUILTIN_PRICES.items():
+        if name == key or name.startswith(key + "-"):
+            return rates
+    return None
+
+
+def _bill(
+    rates: dict[str, float],
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int,
+    long_context: bool,
+) -> float:
+    scale_in = 2.0 if long_context else 1.0
+    scale_out = 1.5 if long_context else 1.0
+    uncached = max(input_tokens - cache_read_tokens, 0)
+    per_m = 1 / 1_000_000
+    return (
+        uncached * rates.get("input", 0.0) * scale_in * per_m
+        + cache_read_tokens * rates.get("cache_read", rates.get("input", 0.0)) * scale_in * per_m
+        + output_tokens * rates.get("output", 0.0) * scale_out * per_m
+    )
+
+
 def estimate_cost(
     model: str,
     *,
@@ -64,28 +100,37 @@ def estimate_cost(
     name = _strip_provider(model)
     override = (overrides or {}).get(name) or (overrides or {}).get(model)
     if override:
-        uncached = max(input_tokens - cache_read_tokens, 0)
-        per_m = 1 / 1_000_000
-        return (
-            uncached * override.get("input", 0.0) * per_m
-            + cache_read_tokens * override.get("cache_read", override.get("input", 0.0)) * per_m
-            + output_tokens * override.get("output", 0.0) * per_m
+        return _bill(
+            override,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            long_context=False,
         )
-    if _calc_price is None:
+    if _calc_price is not None:
+        try:
+            calc = _calc_price(
+                _PriceUsage(
+                    input_tokens=input_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    output_tokens=output_tokens,
+                ),
+                model_ref=name,
+                provider_id=_provider(model),
+            )
+            return float(calc.total_price)
+        except Exception:
+            pass
+    rates = _builtin_rates(name)
+    if rates is None:
         return None
-    try:
-        calc = _calc_price(
-            _PriceUsage(
-                input_tokens=input_tokens,
-                cache_read_tokens=cache_read_tokens,
-                output_tokens=output_tokens,
-            ),
-            model_ref=name,
-            provider_id=_provider(model),
-        )
-    except Exception:
-        return None
-    return float(calc.total_price)
+    return _bill(
+        rates,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=cache_read_tokens,
+        long_context=input_tokens > _LONG_CONTEXT_TOKENS,
+    )
 
 
 def usage_path(threads_dir: Path, thread_id: str) -> Path:
@@ -115,7 +160,12 @@ def read_records(threads_dir: Path, thread_id: str) -> list[dict]:
     return out
 
 
-def summary(threads_dir: Path, thread_id: str) -> dict:
+def summary(
+    threads_dir: Path,
+    thread_id: str,
+    *,
+    overrides: dict[str, dict[str, float]] | None = None,
+) -> dict:
     """Whole-conversation totals: tokens, cost, exact vs estimated requests,
     per-model breakdown, and the ts of the last stored record (so a live
     subscriber can tell already-counted records from new ones)."""
@@ -141,6 +191,14 @@ def summary(threads_dir: Path, thread_id: str) -> dict:
         totals["output_tokens"] += int(r.get("output_tokens", 0))
         totals["reasoning_tokens"] += int(r.get("reasoning_tokens", 0))
         cost = r.get("cost_usd")
+        if cost is None and r.get("model"):
+            cost = estimate_cost(
+                str(r["model"]),
+                input_tokens=int(r.get("input_tokens", 0)),
+                output_tokens=int(r.get("output_tokens", 0)),
+                cache_read_tokens=int(r.get("cache_read_tokens", 0)),
+                overrides=overrides,
+            )
         if cost is None:
             totals["cost_known"] = False
         else:
