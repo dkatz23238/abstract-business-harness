@@ -8,17 +8,17 @@
 @import "tailwindcss/utilities.css";
 
 @theme {
-  --color-bg: #f3f7f4;
+  --color-bg: #f3f6fb;
   --color-pane: #ffffff;
-  --color-line: #dde7df;
-  --color-line-strong: #c9d8cd;
-  --color-ink: #182620;
-  --color-muted: #647a6c;
-  --color-accent: #1f7a4d;
-  --color-accent-strong: #176540;
-  --color-accent-soft: #e7f3ea;
-  --color-accent-soft-2: #f1f8f3;
-  --color-code: #f5f8f5;
+  --color-line: #dde4f0;
+  --color-line-strong: #c9d4e6;
+  --color-ink: #0f1523;
+  --color-muted: #5a6b88;
+  --color-accent: #0064fc;
+  --color-accent-strong: #0050c9;
+  --color-accent-soft: #e7eefc;
+  --color-accent-soft-2: #f4f7fc;
+  --color-code: #f4f7fb;
   --color-danger: #b4231b;
   --color-danger-soft: #fdecea;
   --color-danger-border: #f2c4bf;
@@ -27,27 +27,27 @@
 }
 
 :root {
-  /* Green & white. Surfaces are white on a faintly green-tinted canvas;
-     one forest-green accent carries actions, focus and progress. */
-  --bg: #f3f7f4;
+  /* White surfaces on a navy-tinted canvas. The logo blue carries
+     actions, focus, and progress; periwinkle is the soft wash. */
+  --bg: #f3f6fb;
   --pane: #ffffff;
-  --border: #dde7df;
-  --border-strong: #c9d8cd;
-  --text: #182620;
-  --muted: #647a6c;
-  --accent: #1f7a4d;
-  --accent-strong: #176540;
-  --accent-soft: #e7f3ea;
-  --accent-soft-2: #f1f8f3;
-  --user: #e3f1e7;
+  --border: #dde4f0;
+  --border-strong: #c9d4e6;
+  --text: #0f1523;
+  --muted: #5a6b88;
+  --accent: #0064fc;
+  --accent-strong: #0050c9;
+  --accent-soft: #e7eefc;
+  --accent-soft-2: #f4f7fc;
+  --user: #e7eefc;
   --assistant: #ffffff;
-  --code: #f5f8f5;
+  --code: #f4f7fb;
   --running: #c99a1e;
-  --done: #2a9a5b;
+  --done: #0064fc;
   --danger: #b4231b;
   --danger-soft: #fdecea;
   --danger-border: #f2c4bf;
-  --shadow: 0 1px 2px rgba(24, 38, 32, 0.05), 0 2px 8px rgba(24, 38, 32, 0.04);
+  --shadow: 0 1px 2px rgba(15, 21, 35, 0.05), 0 2px 8px rgba(15, 21, 35, 0.04);
   --radius: 10px;
   --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -105,7 +105,7 @@ a {
   gap: 10px;
 }
 
-/* brand mark: a small green leaf-dot before the title */
+/* brand mark: a small logo-blue mark before the title */
 .app-header h1::before {
   content: "";
   width: 12px;
@@ -493,7 +493,7 @@ button.ghost:hover {
 .bubble.user {
   align-self: flex-end;
   background: var(--user);
-  border: 1px solid #d3e7da;
+  border: 1px solid #d4e0f5;
 }
 
 .bubble.assistant {
@@ -916,12 +916,12 @@ button.ghost:hover {
 .token.prolog,
 .token.doctype,
 .token.cdata {
-  color: #7d8f84;
+  color: #7d8ea6;
   font-style: italic;
 }
 
 .token.punctuation {
-  color: #5c6b62;
+  color: #5c6d88;
 }
 
 .token.property,
@@ -949,7 +949,7 @@ button.ghost:hover {
 .token.operator,
 .token.entity,
 .token.url {
-  color: #3d5a4a;
+  color: #3a4a66;
 }
 
 .token.atrule,

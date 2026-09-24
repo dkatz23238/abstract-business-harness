@@ -223,7 +223,7 @@ function NavItem({
       onClick={onClick}
       className={`flex w-full items-center gap-1.5 rounded-lg border px-3 py-2 text-left text-[15px] font-normal ${
         active
-          ? "border-line bg-pane text-ink shadow-[inset_3px_0_0_#1f7a4d]"
+          ? "border-line bg-pane text-ink shadow-[inset_3px_0_0_#0064fc]"
           : "border-transparent bg-transparent text-ink hover:border-line hover:bg-pane hover:text-ink"
       }`}
     >
