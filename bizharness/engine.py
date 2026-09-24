@@ -65,7 +65,7 @@ from pydantic_monty import MountDir
 from . import core_instructions, harness_patches, plugins
 from .analysis_tool import build_python_analysis_toolset
 from .history import SessionHistory
-from .profile import Profile
+from .profile import DEFAULT_EFFORT, Profile, coerce_effort
 
 
 # Chat Completions (`openai-chat:` / a bare `openai:` string) cannot mix this
@@ -74,7 +74,19 @@ from .profile import Profile
 _OPENAI_SPEC_PREFIXES = ("openai-chat:", "openai-responses:", "openai:")
 
 
-def _reasoning_model(model_spec: str):
+def model_settings_for_effort(effort: str) -> dict:
+    """Per-run settings that pin reasoning effort for OpenAI and everyone else.
+
+    `openai_reasoning_effort` is the explicit OpenAI knob (it wins over the
+    unified `thinking` field when both are present). `thinking` is what
+    non-OpenAI providers read. Both are set so a profile on another model
+    still honours the chat's effort picker.
+    """
+    level = coerce_effort(effort)
+    return {"openai_reasoning_effort": level, "thinking": level}
+
+
+def _reasoning_model(model_spec: str, *, effort: str | None = None):
     """Model + settings that surface the model's reasoning as ThinkingParts.
 
     OpenAI only returns reasoning (as summaries) over the Responses API, so
@@ -83,6 +95,7 @@ def _reasoning_model(model_spec: str):
     which the AG-UI adapter forwards to the frontend as THINKING events and
     the CLI trace prints. Non-OpenAI specs pass through unchanged.
     """
+    level = coerce_effort(effort, default=DEFAULT_EFFORT)
     for prefix in _OPENAI_SPEC_PREFIXES:
         if model_spec.startswith(prefix):
             from pydantic_ai.models.openai import (
@@ -92,7 +105,10 @@ def _reasoning_model(model_spec: str):
 
             return (
                 OpenAIResponsesModel(model_spec.removeprefix(prefix)),
-                OpenAIResponsesModelSettings(openai_reasoning_summary="detailed"),
+                OpenAIResponsesModelSettings(
+                    openai_reasoning_summary="detailed",
+                    openai_reasoning_effort=level,
+                ),
             )
     return model_spec, None
 
@@ -155,7 +171,7 @@ def build(
 
         trace_main = [ToolTrace()]
 
-    model, model_settings = _reasoning_model(profile.model.spec)
+    model, model_settings = _reasoning_model(profile.model.spec, effort=profile.model.effort)
     instructions = profile.resolve_instructions()
     limits = profile.limits
 

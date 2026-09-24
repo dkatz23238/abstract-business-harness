@@ -17,10 +17,35 @@ def test_example_profile_loads(tmp_path, monkeypatch):
     p = load(EXAMPLE)
     assert p.id == "example"
     assert p.code_tool.name == "data_code"
+    assert p.model.effort == "medium"
     text = p.resolve_instructions()
     assert "data_code" in text
     assert "the demo API" in text
     assert p.missing_env() == []
+    ui = p.ui_config()
+    assert ui["default_effort"] == "medium"
+    assert ui["effort_levels"] == ["low", "medium", "high", "xhigh"]
+
+
+def test_invalid_effort_is_a_profile_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path))
+    dest = tmp_path / "copy"
+    shutil.copytree(EXAMPLE, dest)
+    text = (dest / "profile.toml").read_text()
+    (dest / "profile.toml").write_text(text.replace("[model]\n", '[model]\neffort = "ludicrous"\n'))
+    with pytest.raises(ProfileError, match="model.effort"):
+        load(dest)
+
+
+def test_profile_can_override_default_effort(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path))
+    dest = tmp_path / "copy"
+    shutil.copytree(EXAMPLE, dest)
+    text = (dest / "profile.toml").read_text()
+    (dest / "profile.toml").write_text(text.replace("[model]\n", '[model]\neffort = "high"\n'))
+    p = load(dest)
+    assert p.model.effort == "high"
+    assert p.ui_config()["default_effort"] == "high"
 
 
 def test_missing_toml_is_a_profile_error(tmp_path):

@@ -43,7 +43,8 @@ from starlette.datastructures import Headers, QueryParams
 from . import admin, engine as engine_mod, profile as profile_mod
 from .bridge import NestedCallBridge, hub, safe_id as _safe_id
 from .config import EngineSettings, load_dotenv
-from .profile import Profile
+from .engine import model_settings_for_effort
+from .profile import Profile, coerce_effort
 from .runs import RunActiveError, RunManager, ThreadRun, next_or_shutdown, shutdown
 from .usage import UsageMeter, summary as usage_summary
 
@@ -208,6 +209,13 @@ def _encode_error_event(message: str) -> str:
         return f'data: {json.dumps({"type": "RUN_ERROR", "message": message})}\n\n'
 
 
+def _effort_from_forwarded(props: object, *, default: str) -> str:
+    """Read `effort` out of AG-UI forwardedProps, if the client sent one."""
+    if isinstance(props, dict):
+        return coerce_effort(props.get("effort"), default=default)
+    return default
+
+
 def _title_from_messages(messages: list) -> str:
     for m in messages:
         if isinstance(m, dict) and m.get("role") == "user":
@@ -244,20 +252,29 @@ def create_app(
         return state.threads_dir / _safe_id(thread_id) / "conversation.json"
 
     def _persist_conversation(
-        thread_id: str, messages: list[dict], model: str | None = None
+        thread_id: str,
+        messages: list[dict],
+        model: str | None = None,
+        effort: str | None = None,
     ) -> None:
         path = _conversation_path(thread_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        if model is None and path.exists():
+        existing: dict = {}
+        if path.exists():
             try:
-                model = json.loads(path.read_text()).get("model")
+                existing = json.loads(path.read_text())
             except ValueError:
-                model = None
+                existing = {}
+        if model is None:
+            model = existing.get("model")
+        if effort is None:
+            effort = existing.get("effort")
         payload = {
             "id": _safe_id(thread_id),
             "title": _title_from_messages(messages),
             "updated_at": time.time(),
             "model": model,
+            "effort": effort,
             "profile_hash": state.profile.hash,
             "messages": messages,
         }
@@ -288,6 +305,17 @@ def create_app(
         run_id = getattr(adapter.run_input, "run_id", None)
         input_messages = list(getattr(adapter.run_input, "messages", []) or [])
         limits = UsageLimits(request_limit=state.profile.model.request_limit)
+        stored_effort = None
+        conv_path = _conversation_path(thread_id)
+        if conv_path.exists():
+            try:
+                stored_effort = json.loads(conv_path.read_text()).get("effort")
+            except ValueError:
+                stored_effort = None
+        effort = _effort_from_forwarded(
+            getattr(adapter.run_input, "forwarded_props", None),
+            default=coerce_effort(stored_effort, default=state.profile.model.effort),
+        )
 
         async def execute(run: ThreadRun) -> None:
             captured: dict = {}
@@ -301,6 +329,7 @@ def create_app(
                     usage_limits=limits,
                     capabilities=[bridge, meter],
                     on_complete=on_complete,
+                    model_settings=model_settings_for_effort(effort),
                 )
                 async for chunk in adapter.encode_stream(events):
                     run.append(chunk)
@@ -322,6 +351,7 @@ def create_app(
                                 for m in [*input_messages, *new_messages]
                             ],
                             model=state.profile.model.spec,
+                            effort=effort,
                         )
                     except Exception as persist_exc:
                         print(f"[runs] conversation persist failed: {persist_exc!r}", file=sys.stderr)
@@ -412,22 +442,37 @@ def create_app(
                     "updated_at": data.get("updated_at", 0),
                     "message_count": len(data.get("messages", [])),
                     "model": data.get("model"),
+                    "effort": data.get("effort"),
                 }
             )
         threads.sort(key=lambda t: t["updated_at"], reverse=True)
-        return {"threads": threads, "default_model": state.profile.model.spec}
+        return {
+            "threads": threads,
+            "default_model": state.profile.model.spec,
+            "default_effort": state.profile.model.effort,
+        }
 
     @app.get("/threads/{thread_id}")
     async def get_thread(thread_id: str):
         path = _conversation_path(thread_id)
         if not path.exists():
-            return {"id": thread_id, "title": "", "messages": []}
+            return {
+                "id": thread_id,
+                "title": "",
+                "messages": [],
+                "effort": state.profile.model.effort,
+            }
         return json.loads(path.read_text())
 
     @app.put("/threads/{thread_id}")
     async def save_thread(thread_id: str, request: Request):
         body = await request.json()
-        _persist_conversation(thread_id, body.get("messages", []))
+        effort = body.get("effort")
+        _persist_conversation(
+            thread_id,
+            body.get("messages", []),
+            effort=coerce_effort(effort) if effort is not None else None,
+        )
         return {"ok": True}
 
     @app.delete("/threads/{thread_id}")

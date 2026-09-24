@@ -11,7 +11,12 @@
 // swap the fetch target for the duration of that one runAgent call.
 
 import { HttpAgent, type AgentSubscriber, type Message } from "@ag-ui/client";
-import { API_URL, loadThreadMessages, saveThreadMessages } from "./api";
+import {
+  API_URL,
+  loadThread,
+  saveThreadMessages,
+  type EffortLevel,
+} from "./api";
 
 const THREAD_KEY = "bizharness-thread";
 
@@ -54,17 +59,19 @@ export async function attachToRun(subscriber?: AgentSubscriber): Promise<void> {
 }
 
 /** Point the agent at another thread and load its stored conversation. */
-export async function activateThread(threadId: string): Promise<Message[]> {
-  const messages = await loadThreadMessages<Message>(threadId);
+export async function activateThread(
+  threadId: string,
+): Promise<{ messages: Message[]; effort: string | null }> {
+  const thread = await loadThread<Message>(threadId);
   agent.threadId = threadId;
-  agent.setMessages(messages);
+  agent.setMessages(thread.messages);
   sessionStorage.setItem(THREAD_KEY, threadId);
-  return messages;
+  return { messages: thread.messages, effort: thread.effort ?? null };
 }
 
 /** Persist the current conversation server-side. */
-export async function persistConversation(): Promise<void> {
-  await saveThreadMessages(agent.threadId, agent.messages);
+export async function persistConversation(extra?: { effort?: EffortLevel }): Promise<void> {
+  await saveThreadMessages(agent.threadId, agent.messages, extra);
 }
 
 export function freshThreadId(): string {

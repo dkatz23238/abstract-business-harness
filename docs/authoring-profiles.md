@@ -44,7 +44,7 @@ uv run bizharness serve --profile ~/my-profile --data-root ~/my-profile/data
 | Section | What it is |
 |---|---|
 | `[profile]` | `id`, `name`, `description` |
-| `[model]` | `spec` (e.g. `openai:gpt-5.6-luna` or `test`), `request_limit`, optional `[model.prices]` |
+| `[model]` | `spec` (e.g. `openai:gpt-5.6-luna` or `test`), `request_limit`, optional `effort` (`low`/`medium`/`high`/`xhigh`, default `medium`), optional `[model.prices]` |
 | `[code_tool]` | **Rename** the sandbox tool after the data source. A generic `run_code` reads as “any Python here” and snippets drift into the restricted interpreter. `purpose` is optional; wall-clock and heap already have long-horizon defaults. |
 | `[skills]` | `inline` (always in the prompt) vs `deferred` (loaded with `load_capability` when needed) |
 | `[tools]` | omit to load every `tools/*.py`; helpers without `register` are fine |

@@ -541,6 +541,55 @@ button.ghost:hover {
   padding: 12px;
   border-top: 1px solid var(--border);
   background: var(--pane);
+  align-items: stretch;
+}
+
+.chat-send {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  width: 7.5rem;
+}
+
+.effort-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.effort-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.effort-select {
+  width: 100%;
+  background: var(--pane);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.effort-select:hover {
+  border-color: var(--border-strong);
+}
+
+.effort-select:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.chat-send button {
+  flex: 1;
 }
 
 .chat-input textarea {

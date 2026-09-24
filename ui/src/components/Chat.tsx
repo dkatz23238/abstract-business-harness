@@ -15,7 +15,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@ag-ui/client";
-import type { ToolActivity } from "../api";
+import type { EffortLevel, ToolActivity } from "../api";
+import { EFFORT_LEVELS } from "../api";
 import { groupNestedByParent } from "../nestedActivity";
 import { maybeRedact, redactEnabled } from "../redact";
 import CodeBlock from "./CodeBlock";
@@ -29,6 +30,8 @@ interface Props {
   onDismissError: () => void;
   onSend: (text: string) => void;
   onNewConversation: () => void;
+  effort: EffortLevel;
+  onEffortChange: (effort: EffortLevel) => void;
   placeholder?: string;
   hint?: string;
   dataSourceName?: string;
@@ -518,6 +521,13 @@ function Reasoning({ text, live }: { text: string; live: boolean }) {
   );
 }
 
+const EFFORT_LABELS: Record<EffortLevel, string> = {
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra",
+};
+
 function ErrorBanner({ text, onDismiss }: { text: string; onDismiss: () => void }) {
   return (
     <div className="error-banner" role="alert">
@@ -547,6 +557,8 @@ export default function Chat({
   onDismissError,
   onSend,
   onNewConversation,
+  effort,
+  onEffortChange,
   placeholder = "Ask a question…",
   hint,
   dataSourceName = "the data source",
@@ -638,9 +650,27 @@ export default function Chat({
           }}
           rows={3}
         />
-        <button onClick={send} disabled={running || draft.trim() === ""}>
-          {running ? "Running…" : "Send"}
-        </button>
+        <div className="chat-send">
+          <label className="effort-picker">
+            <span className="effort-label">Effort</span>
+            <select
+              className="effort-select"
+              value={effort}
+              disabled={running}
+              onChange={(e) => onEffortChange(e.target.value as EffortLevel)}
+              title="Reasoning effort for this conversation. Medium is the default."
+            >
+              {EFFORT_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {EFFORT_LABELS[level]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button onClick={send} disabled={running || draft.trim() === ""}>
+            {running ? "Running…" : "Send"}
+          </button>
+        </div>
       </footer>
     </section>
   );

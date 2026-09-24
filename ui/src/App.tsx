@@ -14,6 +14,9 @@ import {
   listThreads,
   shortModelName,
   subscribeToolEvents,
+  coerceEffort,
+  DEFAULT_EFFORT,
+  type EffortLevel,
   type ProfileConfig,
   type RunStatus,
   type ThreadSummary,
@@ -97,6 +100,8 @@ export default function App() {
   const [messages, setMessages] = useState<readonly Message[]>([]);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>("");
+  const [defaultEffort, setDefaultEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
+  const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
   const [running, setRunning] = useState(false);
   const [activities, setActivities] = useState<Map<string, ToolActivity>>(new Map());
   const [feedSummary, setFeedSummary] = useState<ToolFeedSummary | null>(null);
@@ -111,6 +116,8 @@ export default function App() {
       .then((p) => {
         setProfile(p);
         document.title = p.title;
+        const fromProfile = coerceEffort(p.default_effort);
+        setDefaultEffort(fromProfile);
       })
       .catch(() => {});
   }, []);
@@ -172,9 +179,10 @@ export default function App() {
 
   const refreshThreads = useCallback(() => {
     listThreads()
-      .then(({ threads, default_model }) => {
+      .then(({ threads, default_model, default_effort }) => {
         setThreads(threads);
         setDefaultModel(default_model);
+        setDefaultEffort(coerceEffort(default_effort));
       })
       .catch((e) => setRunError(`Could not load past conversations — is the backend running?\n${errText(e)}`));
   }, []);
@@ -222,7 +230,7 @@ export default function App() {
           if (status && !status.active) break;
         }
         if (agent.threadId === id) {
-          setMessages(await activateThread(id).catch(() => agent.messages));
+          setMessages(await activateThread(id).then((t) => t.messages).catch(() => agent.messages));
           if (status?.error) setRunError(`The run failed on the server:\n${status.error}`);
           setRunning(false);
         }
@@ -247,8 +255,9 @@ export default function App() {
   // and pick up a run that survived the reload.
   useEffect(() => {
     activateThread(agent.threadId)
-      .then((msgs) => {
-        setMessages(msgs);
+      .then(({ messages, effort: stored }) => {
+        setMessages(messages);
+        setEffort(coerceEffort(stored));
         return syncRunState(agent.threadId);
       })
       .catch((e) => setRunError(`Could not restore this conversation:\n${errText(e)}`));
@@ -278,7 +287,9 @@ export default function App() {
     if (id === threadId) return;
     leaveRun();
     try {
-      setMessages(await activateThread(id));
+      const { messages, effort: stored } = await activateThread(id);
+      setMessages(messages);
+      setEffort(coerceEffort(stored, defaultEffort));
     } catch (e) {
       setRunError(`Could not open that conversation:\n${errText(e)}`);
       syncRunState(threadId).catch(() => {}); // still here: follow its run again
@@ -322,6 +333,7 @@ export default function App() {
     setActivities(new Map());
     setRunError(null);
     setThreadId(id);
+    setEffort(defaultEffort);
   };
 
   const send = async (text: string) => {
@@ -333,17 +345,17 @@ export default function App() {
     setRunning(true);
     // Persist the prompt right away so a mid-run refresh still shows it, and
     // list the thread so the user can navigate away and back while it runs.
-    persistConversation().then(refreshThreads).catch(() => {});
+    persistConversation({ effort }).then(refreshThreads).catch(() => {});
 
     const finishAttached = () => {
       setRunning(false);
       setMessages([...agent.messages]);
-      persistConversation().then(refreshThreads).catch(() => {});
+      persistConversation({ effort }).then(refreshThreads).catch(() => {});
     };
 
     try {
       await agent.runAgent(
-        undefined,
+        { forwardedProps: { effort } },
         liveSubscriber(
           () => setMessages([...agent.messages]),
           (msg) => setRunError(msg),
@@ -449,6 +461,11 @@ export default function App() {
             onDismissError={() => setRunError(null)}
             onSend={send}
             onNewConversation={newThread}
+            effort={effort}
+            onEffortChange={(next) => {
+              setEffort(next);
+              if (agent.messages.length > 0) persistConversation({ effort: next }).catch(() => {});
+            }}
             placeholder={profile?.placeholder}
             hint={profile?.hint}
             dataSourceName={profile?.data_source_name}

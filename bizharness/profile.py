@@ -66,9 +66,25 @@ class ProfileError(Exception):
         super().__init__("; ".join(problems))
 
 
+# Reasoning effort the UI can pick per chat. `medium` is the engine default
+# (and OpenAI's for GPT-5.x). `minimal` is omitted: GPT-5.6 rejects it.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh")
+DEFAULT_EFFORT = "medium"
+
+
+def coerce_effort(value: object | None, *, default: str = DEFAULT_EFFORT) -> str:
+    """Return a valid effort level; unknown or missing values become `default`."""
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in EFFORT_LEVELS:
+            return candidate
+    return default
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     spec: str = "openai:gpt-5.6-luna"
+    effort: str = DEFAULT_EFFORT
     request_limit: int = 500
     retries: int = 6
     prices: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -289,6 +305,8 @@ class Profile:
             "name": self.name,
             "description": self.description,
             "model": self.model.spec,
+            "default_effort": self.model.effort,
+            "effort_levels": list(EFFORT_LEVELS),
             "code_tool": self.code_tool.name,
             "profile_hash": self.hash,
             **self.ui,
@@ -414,8 +432,14 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
         )
 
     model_raw = data.get("model", {})
+    raw_effort = model_raw.get("effort", DEFAULT_EFFORT)
+    if str(raw_effort).strip().lower() not in EFFORT_LEVELS:
+        problems.append(
+            f"model.effort {raw_effort!r} must be one of {', '.join(EFFORT_LEVELS)}"
+        )
     model = ModelConfig(
         spec=str(model_raw.get("spec", ModelConfig.spec)),
+        effort=coerce_effort(raw_effort),
         request_limit=int(model_raw.get("request_limit", ModelConfig.request_limit)),
         retries=int(model_raw.get("retries", ModelConfig.retries)),
         prices={k: dict(v) for k, v in (model_raw.get("prices") or {}).items()},

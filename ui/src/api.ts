@@ -18,6 +18,19 @@ export interface ProfileConfig {
   hint?: string;
   code_tool: string;
   model: string;
+  /** Profile default; the chat picker starts here on a new thread. */
+  default_effort?: EffortLevel;
+  effort_levels?: EffortLevel[];
+}
+
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+export const DEFAULT_EFFORT: EffortLevel = "medium";
+
+const EFFORT_SET = new Set<string>(EFFORT_LEVELS);
+
+export function coerceEffort(value: unknown, fallback: EffortLevel = DEFAULT_EFFORT): EffortLevel {
+  return typeof value === "string" && EFFORT_SET.has(value) ? (value as EffortLevel) : fallback;
 }
 
 export async function fetchProfile(): Promise<ProfileConfig> {
@@ -71,19 +84,27 @@ export interface ThreadSummary {
   message_count: number;
   /** Model that last answered in this thread; null for threads saved before models were recorded. */
   model: string | null;
+  /** Reasoning effort last used in this thread; null for threads saved before effort was recorded. */
+  effort: EffortLevel | null;
 }
 
 export interface ThreadListing {
   threads: ThreadSummary[];
   /** Model a new (not yet run) thread will use. */
   default_model: string;
+  /** Effort a new thread starts at. */
+  default_effort: EffortLevel;
 }
 
 export async function listThreads(): Promise<ThreadListing> {
   const res = await fetch(`${API_URL}/threads`);
   if (!res.ok) throw new Error(`thread listing failed: ${res.status}`);
   const data = await res.json();
-  return { threads: data.threads as ThreadSummary[], default_model: data.default_model ?? "" };
+  return {
+    threads: data.threads as ThreadSummary[],
+    default_model: data.default_model ?? "",
+    default_effort: coerceEffort(data.default_effort),
+  };
 }
 
 /** "openai:gpt-5.6-luna" -> "gpt-5.6-luna" for compact display. */
@@ -93,17 +114,40 @@ export function shortModelName(model: string | null | undefined): string {
   return i >= 0 ? model.slice(i + 1) : model;
 }
 
-export async function loadThreadMessages<M>(threadId: string): Promise<M[]> {
-  const res = await fetch(`${API_URL}/threads/${threadId}`);
-  if (!res.ok) throw new Error(`thread load failed: ${res.status}`);
-  return ((await res.json()).messages ?? []) as M[];
+export interface ThreadDetail<M = unknown> {
+  id: string;
+  title: string;
+  messages: M[];
+  model?: string | null;
+  effort?: string | null;
 }
 
-export async function saveThreadMessages(threadId: string, messages: unknown): Promise<void> {
+export async function loadThread<M>(threadId: string): Promise<ThreadDetail<M>> {
+  const res = await fetch(`${API_URL}/threads/${threadId}`);
+  if (!res.ok) throw new Error(`thread load failed: ${res.status}`);
+  const data = (await res.json()) as ThreadDetail<M>;
+  return {
+    id: data.id ?? threadId,
+    title: data.title ?? "",
+    messages: (data.messages ?? []) as M[],
+    model: data.model,
+    effort: data.effort,
+  };
+}
+
+export async function loadThreadMessages<M>(threadId: string): Promise<M[]> {
+  return (await loadThread<M>(threadId)).messages;
+}
+
+export async function saveThreadMessages(
+  threadId: string,
+  messages: unknown,
+  extra?: { effort?: EffortLevel },
+): Promise<void> {
   await fetch(`${API_URL}/threads/${threadId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, ...(extra?.effort ? { effort: extra.effort } : {}) }),
   });
 }
 

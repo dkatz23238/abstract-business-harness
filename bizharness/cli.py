@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from .config import EngineSettings, load_dotenv
-from .profile import Profile, ProfileError, delete_secret, load, write_secret
+from .profile import EFFORT_LEVELS, Profile, ProfileError, delete_secret, load, write_secret
 
 
 def _engine(args) -> EngineSettings:
@@ -57,21 +57,29 @@ def cmd_serve(args) -> None:
 def cmd_chat(args) -> None:
     from pydantic_ai.usage import UsageLimits
 
-    from .engine import build
+    from .engine import build, model_settings_for_effort
 
     profile = _load_profile(args)
     _setup_tracing(f"bizharness:{profile.id}")
     built = build(profile, trace_tools=args.verbose)
     limits = UsageLimits(request_limit=profile.model.request_limit)
+    effort = args.effort or profile.model.effort
+    settings = model_settings_for_effort(effort)
     print(
         f"[bizharness] profile={profile.id} model={profile.model.spec} "
-        f"workspace={built.workspace}"
+        f"effort={effort} workspace={built.workspace}"
     )
     if args.prompt:
-        result = built.agent.run_sync(args.prompt, usage_limits=limits)
+        result = built.agent.run_sync(
+            args.prompt, usage_limits=limits, model_settings=settings
+        )
         print(result.output)
         return
-    built.agent.to_cli_sync(prog_name=f"bizharness:{profile.id}", usage_limits=limits)
+    built.agent.to_cli_sync(
+        prog_name=f"bizharness:{profile.id}",
+        usage_limits=limits,
+        model_settings=settings,
+    )
 
 
 def _console():
@@ -307,6 +315,12 @@ def main(argv: list[str] | None = None) -> None:
     chat = sub.add_parser("chat", help="CLI chat / one-shot prompt", parents=[shared])
     chat.add_argument("-p", "--prompt")
     chat.add_argument("-v", "--verbose", action="store_true")
+    chat.add_argument(
+        "--effort",
+        choices=EFFORT_LEVELS,
+        default=None,
+        help="reasoning effort (default: profile / medium)",
+    )
     chat.set_defaults(func=cmd_chat)
 
     val = sub.add_parser("profile", help="profile utilities")
