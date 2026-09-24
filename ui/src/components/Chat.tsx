@@ -564,21 +564,36 @@ export default function Chat({
   dataSourceName = "the data source",
 }: Props) {
   const [draft, setDraft] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
 
   const { items, nestedByParent, protocolResults } = useMemo(
     () => buildFeed(messages, activities, running),
     [messages, activities, running],
   );
 
+  const followBottom = () => {
+    const el = scrollRef.current;
+    if (!el || !stickToBottom.current) return;
+    el.scrollTop = el.scrollHeight;
+  };
+
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [items.length, activities.size, running, error]);
+    followBottom();
+  }, [items, activities, running, error]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottom.current = distance < 80;
+  };
 
   const send = () => {
     const text = draft.trim();
     if (!text || running) return;
     setDraft("");
+    stickToBottom.current = true;
     onSend(text);
   };
 
@@ -592,7 +607,7 @@ export default function Chat({
           New conversation
         </button>
       </header>
-      <div className="chat-scroll">
+      <div className="chat-scroll" ref={scrollRef} onScroll={onScroll}>
         {items.length === 0 && !running && (
           <p className="hint">
             {hint ??
@@ -635,7 +650,6 @@ export default function Chat({
         })}
         {running && !liveReasoning && <div className="bubble assistant thinking">Working…</div>}
         {error && <ErrorBanner text={maybeRedact(error)} onDismiss={onDismissError} />}
-        <div ref={bottomRef} />
       </div>
       <footer className="chat-input">
         <textarea

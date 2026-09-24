@@ -454,6 +454,7 @@ export default function App() {
         />
         <div className="panes">
           <Chat
+            key={threadId ?? "new"}
             messages={messages}
             activities={activities}
             running={running}
