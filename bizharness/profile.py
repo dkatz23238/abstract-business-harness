@@ -158,6 +158,33 @@ DEFAULT_UI = {
 }
 
 
+def parse_redact_terms(value: object) -> list[str]:
+    """Terms to mask in the share view.
+
+    A string is split on commas and newlines. A list is one term per item,
+    and any item that itself contains commas or newlines is split the same
+    way. Matching later is case-insensitive; duplicates are dropped.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        chunks = [value]
+    elif isinstance(value, list):
+        chunks = [str(item) for item in value]
+    else:
+        raise ProfileError(
+            ["redact.terms must be a comma-separated string or a list of strings"]
+        )
+    seen: dict[str, str] = {}
+    for chunk in chunks:
+        for part in re.split(r"[\n,]", chunk):
+            term = part.strip()
+            if not term or term.startswith("#"):
+                continue
+            seen.setdefault(term.casefold(), term)
+    return list(seen.values())
+
+
 @dataclass
 class Profile:
     id: str
@@ -178,6 +205,7 @@ class Profile:
     env: dict[str, str]
     hash: str
     raw_toml: str
+    redact_terms: list[str] = field(default_factory=list)
 
     # ---------------- derived paths ----------------
 
@@ -310,6 +338,7 @@ class Profile:
             "code_tool": self.code_tool.name,
             "profile_hash": self.hash,
             **self.ui,
+            "redact_terms": list(self.redact_terms),
         }
 
 
@@ -428,6 +457,31 @@ def config_files(path: Path) -> list[Path]:
     files += sorted((path / "skills").glob("*/SKILL.md"))
     files += sorted((path / "tools").glob("*.py"))
     return files
+
+
+def _redact_terms_file(profile_path: Path, spec: object) -> Path | None:
+    if spec is None:
+        return None
+    raw = str(spec).strip()
+    if not raw:
+        return None
+    candidate = (profile_path / raw).resolve()
+    if not candidate.is_relative_to(profile_path.resolve()):
+        raise ProfileError(["redact.terms_file must stay inside the profile directory"])
+    if not candidate.is_file():
+        raise ProfileError([f"redact.terms_file {raw!r} not found"])
+    return candidate
+
+
+def _load_redact_terms(profile_path: Path, data: dict) -> tuple[list[str], Path | None]:
+    raw = data.get("redact") or {}
+    if not isinstance(raw, dict):
+        raise ProfileError(["[redact] must be a table"])
+    terms = parse_redact_terms(raw.get("terms"))
+    terms_file = _redact_terms_file(profile_path, raw.get("terms_file"))
+    if terms_file is not None:
+        terms = parse_redact_terms([*terms, terms_file.read_text()])
+    return terms, terms_file
 
 
 def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile:
@@ -574,6 +628,15 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
 
     data_dir = settings.profile_data_dir(profile_id)
     env = _resolve_env(profile_id, env_spec, data_dir / _SECRETS_FILE, path)
+    try:
+        redact_terms, redact_file = _load_redact_terms(path, data)
+    except ProfileError as exc:
+        problems.extend(exc.problems)
+        redact_terms, redact_file = [], None
+
+    hashed = config_files(path)
+    if redact_file is not None:
+        hashed.append(redact_file)
 
     profile = Profile(
         id=profile_id,
@@ -592,8 +655,9 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
         memory_guidance=memory_guidance,
         template_vars=template_vars,
         env=env,
-        hash=_hash_files(config_files(path)),
+        hash=_hash_files(hashed),
         raw_toml=raw_toml,
+        redact_terms=redact_terms,
     )
 
     if problems:

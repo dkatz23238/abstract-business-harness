@@ -51,8 +51,29 @@ uv run bizharness serve --profile ~/my-profile --data-root ~/my-profile/data
 | `[env]` | `optional` / `required` names to list in validate; put non-secret defaults in the tool client, not here |
 | `[limits]` | omit unless you need tighter spill / timeouts than the engine defaults |
 | `[instructions]` | only if `instructions.md` uses `{{ core.* }}` — filler for `data_tool_examples`, `report_detail_hint`, … |
+| `[redact]` | optional names to mask in the UI when the page is opened with `?redact=1` |
 
 `ui.json` is what the web UI reads via `GET /profile`: `title`, `placeholder`, `hint`, `data_calls_label`, `data_source_name`.
+
+### Sharing view (`?redact=1`)
+
+Opening the UI with `?redact=1` masks figures in chat, tool output, and HTML reports. It is display-only: the stored thread is unchanged.
+
+`[redact]` adds customer and establishment names to that same mask. Matching ignores capitalization and does not fire inside a longer word. `terms` is either a comma-separated string or a list. A long list (hundreds of names) belongs in a file next to the profile, one name per line or comma-separated:
+
+```toml
+[redact]
+terms = "Acme Grain, North Elevator"
+# or
+terms = ["Acme Grain", "North Elevator"]
+terms_file = "redact_terms.txt"
+```
+
+```text
+# redact_terms.txt
+Acme Grain
+North Elevator
+```
 
 ## Tools
 

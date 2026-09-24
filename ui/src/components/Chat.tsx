@@ -18,7 +18,7 @@ import type { Message } from "@ag-ui/client";
 import type { EffortLevel, ToolActivity } from "../api";
 import { EFFORT_LEVELS } from "../api";
 import { groupNestedByParent } from "../nestedActivity";
-import { maybeRedact, redactEnabled } from "../redact";
+import { maybeRedact, redactEnabled, useRedactGeneration } from "../redact";
 import CodeBlock from "./CodeBlock";
 import Markdown from "./Markdown";
 
@@ -563,6 +563,7 @@ export default function Chat({
   hint,
   dataSourceName = "the data source",
 }: Props) {
+  useRedactGeneration();
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);

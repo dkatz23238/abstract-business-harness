@@ -21,6 +21,8 @@ export interface ProfileConfig {
   /** Profile default; the chat picker starts here on a new thread. */
   default_effort?: EffortLevel;
   effort_levels?: EffortLevel[];
+  /** Names and phrases masked in the UI when `?redact=1`. */
+  redact_terms?: string[];
 }
 
 export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;

@@ -27,3 +27,9 @@ analysis_timeout_s = 60
 [instructions]
 data_tool_examples = "get_post, list_posts"
 report_detail_hint = "the fetched records"
+
+# Masked in the UI only when the page is opened with ?redact=1.
+# `terms` may be a comma-separated string or a list. A long list can live
+# in a file instead: terms_file = "redact_terms.txt" (one name per line).
+[redact]
+terms = ["Acme Grain", "North Elevator"]

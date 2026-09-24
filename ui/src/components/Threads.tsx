@@ -1,5 +1,5 @@
 import { shortModelName, type ThreadSummary } from "../api";
-import { maybeRedact } from "../redact";
+import { maybeRedact, useRedactGeneration } from "../redact";
 
 interface Props {
   threads: ThreadSummary[];
@@ -18,6 +18,7 @@ function when(ts: number): string {
 }
 
 export default function Threads({ threads, activeId, onSelect, onNew, onDelete }: Props) {
+  useRedactGeneration();
   return (
     <aside className="sidebar">
       <button className="new-thread" onClick={onNew}>

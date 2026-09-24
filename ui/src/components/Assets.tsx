@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchWorkspaceFiles, rawFileUrl, type WorkspaceFile } from "../api";
-import { redactEnabled, redactHtml } from "../redact";
+import { redactEnabled, redactHtml, useRedactGeneration } from "../redact";
 
 interface Props {
   running: boolean;
@@ -28,6 +28,7 @@ function HtmlPreview({
   onClose: () => void;
 }) {
   const redact = redactEnabled();
+  const redactGen = useRedactGeneration();
   const raw = rawFileUrl(threadId, path);
   const [html, setHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -55,7 +56,7 @@ function HtmlPreview({
       revoked = true;
       if (created) URL.revokeObjectURL(created);
     };
-  }, [redact, raw]);
+  }, [redact, redactGen, raw]);
 
   const openHref = redact ? (blobUrl ?? raw) : raw;
 

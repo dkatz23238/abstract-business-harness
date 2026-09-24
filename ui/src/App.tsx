@@ -29,7 +29,7 @@ import Threads from "./components/Threads";
 import Assets from "./components/Assets";
 import Admin from "./components/Admin";
 import Modal, { btnDanger, btnGhost } from "./components/Modal";
-import { redactEnabled } from "./redact";
+import { redactEnabled, setRedactTerms } from "./redact";
 import "./App.css";
 
 /** Human-readable error text: unwrap Error objects, keep full detail. */
@@ -114,6 +114,7 @@ export default function App() {
   useEffect(() => {
     fetchProfile()
       .then((p) => {
+        setRedactTerms(p.redact_terms ?? []);
         setProfile(p);
         document.title = p.title;
         const fromProfile = coerceEffort(p.default_effort);
@@ -385,8 +386,11 @@ export default function App() {
       <header className="app-header">
         <h1>{profile?.title ?? "Analysis Agent"}</h1>
         {redactEnabled() && (
-          <span className="demo-redact" title="?redact=1 — figures in chat and reports are masked for display">
-            numbers hidden
+          <span
+            className="demo-redact"
+            title="?redact=1 — figures and profile redact terms are masked for display"
+          >
+            {(profile?.redact_terms?.length ?? 0) > 0 ? "names hidden" : "numbers hidden"}
           </span>
         )}
         {view === "chat" && (

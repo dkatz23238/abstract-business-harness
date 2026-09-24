@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import Prism from "prismjs";
-import { redactText } from "../redact";
+import { redactText, useRedactGeneration } from "../redact";
 import "prismjs/components/prism-python";
 import "prismjs/components/prism-json";
 import "prismjs/components/prism-sql";
@@ -56,12 +56,13 @@ interface Props {
   language?: string;
   /** Pretty-print JSON before highlighting (off for source code). */
   format?: boolean;
-  /** Mask figures after formatting (`?redact=1` demos). */
+  /** Mask figures and profile terms after formatting (`?redact=1`). */
   redact?: boolean;
   className?: string;
 }
 
 export default function CodeBlock({ code, language = "auto", format = false, redact = false, className }: Props) {
+  const redactGen = useRedactGeneration();
   const { html, lang, text } = useMemo(() => {
     let lang = LANGS[language.toLowerCase()];
     if (language === "auto" && looksLikeJson(code)) lang = "json";
@@ -69,7 +70,7 @@ export default function CodeBlock({ code, language = "auto", format = false, red
     if (redact) text = redactText(text);
     if (!lang || text.length > HIGHLIGHT_LIMIT) return { html: null, lang, text };
     return { html: Prism.highlight(text, Prism.languages[lang], lang), lang, text };
-  }, [code, language, format, redact]);
+  }, [code, language, format, redact, redactGen]);
   const cls = [className, lang ? `language-${lang}` : ""].filter(Boolean).join(" ");
   if (html === null) return <pre className={cls}>{text}</pre>;
   return <pre className={cls} dangerouslySetInnerHTML={{ __html: html }} />;
