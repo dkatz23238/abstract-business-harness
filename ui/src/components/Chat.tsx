@@ -9,12 +9,14 @@
 // ending in "Fix the errors and try again."). The side-channel bridge feed
 // only enriches — args/code, result preview, duration, error text — and
 // contributes the NESTED data fetches made inside the code tool, which the
-// protocol never sees. Nested activities are grouped under the top-level
-// call whose execution window contains them.
+// protocol never sees. Those are grouped under their CodeMode parent
+// (`{toolCallId}__n`) once that call exists on an assistant message — never
+// parked as dangling rows under the user bubble.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@ag-ui/client";
 import type { ToolActivity } from "../api";
+import { groupNestedByParent } from "../nestedActivity";
 import { maybeRedact, redactEnabled } from "../redact";
 import CodeBlock from "./CodeBlock";
 import Markdown from "./Markdown";
@@ -197,7 +199,6 @@ function buildFeed(
 ): {
   items: FeedItem[];
   nestedByParent: Map<string, ToolActivity[]>;
-  orphans: ToolActivity[];
   protocolResults: Map<string, ProtocolResult>;
 } {
   const items: FeedItem[] = [];
@@ -296,32 +297,8 @@ function buildFeed(
     // bridge feed, which also covers nested calls the protocol can't see.
   });
 
-  // Nested activity → parent top-level call whose window contains it.
-  const parents = [...activities.values()]
-    .filter((a) => topLevelIds.has(a.callId))
-    .sort((a, b) => a.startedAt - b.startedAt);
-  const nestedByParent = new Map<string, ToolActivity[]>();
-  const orphans: ToolActivity[] = [];
-  for (const a of activities.values()) {
-    if (topLevelIds.has(a.callId)) continue;
-    let parent: ToolActivity | undefined;
-    for (const p of parents) {
-      if (p.startedAt <= a.startedAt) parent = p;
-      else break;
-    }
-    if (parent) {
-      const list = nestedByParent.get(parent.callId) ?? [];
-      list.push(a);
-      nestedByParent.set(parent.callId, list);
-    } else {
-      orphans.push(a);
-    }
-  }
-  for (const list of nestedByParent.values()) {
-    list.sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq);
-  }
-  orphans.sort((a, b) => a.startedAt - b.startedAt || a.seq - b.seq);
-  return { items, nestedByParent, orphans, protocolResults };
+  const nestedByParent = groupNestedByParent(activities.values(), topLevelIds);
+  return { items, nestedByParent, protocolResults };
 }
 
 /** Lifecycle of a top-level call, decided in this order of authority:
@@ -577,7 +554,7 @@ export default function Chat({
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const { items, nestedByParent, orphans, protocolResults } = useMemo(
+  const { items, nestedByParent, protocolResults } = useMemo(
     () => buildFeed(messages, activities, running),
     [messages, activities, running],
   );
@@ -644,13 +621,6 @@ export default function Chat({
             </div>
           );
         })}
-        {running && orphans.length > 0 && (
-          <div className="tool-group">
-            {orphans.map((a) => (
-              <NestedRow key={a.callId} activity={a} parentDone={false} />
-            ))}
-          </div>
-        )}
         {running && !liveReasoning && <div className="bubble assistant thinking">Working…</div>}
         {error && <ErrorBanner text={maybeRedact(error)} onDismiss={onDismissError} />}
         <div ref={bottomRef} />
