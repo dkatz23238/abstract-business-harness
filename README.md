@@ -33,7 +33,10 @@ Open the Vite URL (5173, or 5174+ if that port is taken). The UI proxies
 `/agui`, `/profile`, and the other engine routes to `VITE_API_URL`, so a
 second Vite on another localhost port does not need CORS. The example
 profile talks to a public JSON API and uses `openai:gpt-5.6-luna` (needs
-`OPENAI_API_KEY`). For a no-key smoke test, set `[model] spec = "test"`.
+`OPENAI_API_KEY`). Set `OPENAI_BASE_URL` to send that client to an
+OpenAI-compatible server such as OpenRouter
+(`https://openrouter.ai/api/v1`); leave it unset to use OpenAI. For a
+no-key smoke test, set `[model] spec = "test"`.
 
 A production build of the UI is served by the same process. `npm run build`
 in `ui/` (with `VITE_API_URL` empty) writes `ui/dist`, and `bizharness serve`

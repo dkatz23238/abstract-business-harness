@@ -20,6 +20,9 @@ Environment:
   HARNESS_UI_DIR        built web UI (index.html). Default: <repo>/ui/dist
                         when that build exists; unset means API only.
   LOGFIRE_TOKEN         optional live tracing.
+  OPENAI_BASE_URL       optional base URL for OpenAI-compatible `openai:`
+                        specs. Unset uses https://api.openai.com/v1.
+                        Example: https://openrouter.ai/api/v1
 """
 
 from __future__ import annotations

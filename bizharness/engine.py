@@ -48,6 +48,7 @@ sequential dives against its own saved data is simpler and reliable.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,9 +103,16 @@ def _reasoning_model(model_spec: str, *, effort: str | None = None):
                 OpenAIResponsesModel,
                 OpenAIResponsesModelSettings,
             )
+            from pydantic_ai.providers.openai import OpenAIProvider
 
+            # Unset keeps the OpenAI client's own default, https://api.openai.com/v1.
+            # Set this to an OpenAI-compatible server such as OpenRouter.
+            base_url = os.environ.get("OPENAI_BASE_URL", "").strip() or None
             return (
-                OpenAIResponsesModel(model_spec.removeprefix(prefix)),
+                OpenAIResponsesModel(
+                    model_spec.removeprefix(prefix),
+                    provider=OpenAIProvider(base_url=base_url),
+                ),
                 OpenAIResponsesModelSettings(
                     openai_reasoning_summary="detailed",
                     openai_reasoning_effort=level,

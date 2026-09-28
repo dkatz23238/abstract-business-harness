@@ -19,6 +19,20 @@ def test_openai_spec_honours_requested_effort(monkeypatch):
     assert settings["openai_reasoning_effort"] == "high"
 
 
+def test_openai_base_url_defaults_to_openai(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model, _ = _reasoning_model("openai:gpt-5.6-luna")
+    assert model.base_url.rstrip("/") == "https://api.openai.com/v1"
+
+
+def test_openai_base_url_honours_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1/")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    model, _ = _reasoning_model("openai:gpt-5.6-luna")
+    assert model.base_url.rstrip("/") == "https://openrouter.ai/api/v1"
+
+
 def test_test_model_passthrough():
     model, settings = _reasoning_model("test")
     assert model == "test"
