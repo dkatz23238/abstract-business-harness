@@ -56,6 +56,10 @@ docker run --rm -p 8811:8811 \
   bizharness
 ```
 
+Pushes to `main` publish `dkatz23238/abstract-business-harness` as `latest`,
+`main`, and `sha-<short commit>`. Pin a deploy to the `sha-` tag. `latest`
+and `main` move with the branch.
+
 Open `http://localhost:8811`. The image reads one mount, `/harness-profile`.
 A `profile.toml` there is the profile; otherwise `profile/profile.toml` is.
 State goes to `harness-data/` when that directory exists, otherwise `data/`.
