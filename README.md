@@ -159,6 +159,39 @@ curl -N http://127.0.0.1:8811/agui \
 `$API_KEY` is the value printed at startup. `forwardedProps.effort` may be
 `low`, `medium`, `high`, or `xhigh`.
 
+## Workspace files
+
+Each thread writes files under `workspaces/<thread_id>/`. `GET
+/workspace/{thread_id}/files` is in `/docs` and returns the relative paths:
+
+```bash
+curl -s http://127.0.0.1:8811/workspace/thread-1/files \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+```json
+{
+  "root": ".../workspaces/thread-1",
+  "files": [
+    {"path": "reports/summary.html", "size": 1234, "mtime": 1750000000.0, "kind": "html"}
+  ]
+}
+```
+
+`path` is relative to that thread's workspace. Dotfiles are omitted.
+
+Fetch the bytes by appending that `path` to `/workspace/raw/<thread_id>/`.
+That URL is a static file mount, so `/docs` has no operation for it:
+
+```bash
+curl -L -o summary.html \
+  -H "Authorization: Bearer $API_KEY" \
+  "http://127.0.0.1:8811/workspace/raw/thread-1/reports/summary.html"
+```
+
+URL-encode spaces and other reserved characters in `path`. `?token=$API_KEY`
+works in place of the Bearer header; the UI uses that for report iframes.
+
 ## Admin
 
 Admin HTTP (Bearer `HARNESS_ADMIN_TOKEN`): rewrite tools/skills/instructions,
