@@ -136,6 +136,29 @@ The web UI asks for this key on the sign-in screen and keeps it in
 tab has a **Rotate API key** button that does this and shows the new value
 once. Other browsers signed in with the old key are signed out.
 
+## Start a thread
+
+`POST /agui` starts a thread (a new `threadId`) and streams AG-UI events.
+`-N` makes curl print each event as it arrives:
+
+```bash
+curl -N http://127.0.0.1:8811/agui \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "threadId": "thread-1",
+    "runId": "run-1",
+    "messages": [{"id": "m1", "role": "user", "content": "Hello"}],
+    "tools": [],
+    "context": [],
+    "forwardedProps": {},
+    "state": {}
+  }'
+```
+
+`$API_KEY` is the value printed at startup. `forwardedProps.effort` may be
+`low`, `medium`, `high`, or `xhigh`.
+
 ## Admin
 
 Admin HTTP (Bearer `HARNESS_ADMIN_TOKEN`): rewrite tools/skills/instructions,
