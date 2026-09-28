@@ -25,7 +25,9 @@ def _client(tmp_path, monkeypatch, *, spec: str = "test"):
     settings = EngineSettings(data_root=tmp_path / "data")
     profile = load(dest, settings=settings)
     app = create_app(profile, engine=settings, profile_path=dest)
-    return TestClient(app)
+    client = TestClient(app)
+    client.headers["Authorization"] = f"Bearer {app.state.harness.api_key.value}"
+    return client
 
 
 def test_incomplete_agui_body_is_422_not_500(tmp_path, monkeypatch):

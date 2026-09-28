@@ -13,11 +13,11 @@ logged per thread so the timeline survives a refresh.
 
 Run with:  bizharness serve --profile PATH --port 8811
 
-Auth: if HARNESS_UI_TOKEN is set, every request except `/admin/*` and the
-built UI files must carry it as a `Authorization: Bearer <token>` header
-or `?token=` query parameter (the latter so iframe/report links work).
-Unset = open local tool. `/admin/*` is gated separately by
-`HARNESS_ADMIN_TOKEN`.
+Auth: every request except `/admin/*`, the docs pages, and the built UI
+files must carry the API key as `Authorization: Bearer <key>` or
+`?token=` (the latter so iframe and EventSource links work). The key is
+created at startup in `<data-root>/api_key` and printed in the log.
+`/admin/*` is gated separately by `HARNESS_ADMIN_TOKEN`.
 
 When `ui/dist` (or `HARNESS_UI_DIR`) contains `index.html`, that build is
 served on `/` by the same process. API routes stay on their own paths.
@@ -29,6 +29,7 @@ import asyncio
 import contextlib
 import json
 import os
+import secrets
 import shutil
 import signal
 import sys
@@ -44,7 +45,19 @@ from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_ai.usage import UsageLimits
 from starlette.datastructures import Headers, QueryParams
 
-from . import admin, engine as engine_mod, profile as profile_mod
+from . import __version__, admin, engine as engine_mod, profile as profile_mod
+from .auth import ApiKey, load_or_create_api_key
+from .api_docs import (
+    EVENTS,
+    OPENAPI_TAGS,
+    PROFILE,
+    RUNS,
+    THREADS,
+    WORKSPACE,
+    EventStreamResponse,
+    SaveThreadBody,
+    install as install_openapi,
+)
 from .bridge import NestedCallBridge, hub, safe_id as _safe_id
 from .config import EngineSettings, load_dotenv
 from .engine import model_settings_for_effort
@@ -86,6 +99,11 @@ async def _lifespan(app: FastAPI):
     shutdown.set()
 
 
+# Swagger UI loads these without a key. Calls made from "Try it out" still
+# need the API key; the scheme is on each operation.
+_PUBLIC_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
+
+
 class _TokenMiddleware:
     """Bearer/`?token=` check as pure ASGI middleware.
 
@@ -98,12 +116,12 @@ class _TokenMiddleware:
     def __init__(
         self,
         app,
-        token: str | None,
+        api_key: ApiKey,
         skip_prefixes: tuple[str, ...] = (),
         ui_dir: Path | None = None,
     ):
         self.app = app
-        self.token = token
+        self.api_key = api_key
         self.skip_prefixes = skip_prefixes
         self.ui_dir = ui_dir
 
@@ -133,18 +151,21 @@ class _TokenMiddleware:
         ):
             await self.app(scope, receive, send)
             return
+        if path in _PUBLIC_PATHS or path.startswith("/docs/"):
+            await self.app(scope, receive, send)
+            return
         if self.skip_prefixes and any(
             path == p or path.startswith(p.rstrip("/") + "/") for p in self.skip_prefixes
         ):
             await self.app(scope, receive, send)
             return
-        if self.token and scope["type"] == "http" and scope.get("method") != "OPTIONS":
+        if scope["type"] == "http" and scope.get("method") != "OPTIONS":
             supplied = (
                 Headers(scope=scope).get("authorization", "").removeprefix("Bearer ").strip()
             )
             if not supplied:
                 supplied = QueryParams(scope.get("query_string", b"")).get("token", "")
-            if supplied != self.token:
+            if not secrets.compare_digest(supplied.encode(), self.api_key.value.encode()):
                 response = JSONResponse({"detail": "unauthorized"}, status_code=401)
                 await response(scope, receive, send)
                 return
@@ -154,10 +175,17 @@ class _TokenMiddleware:
 class AppState:
     """Mutable server state: the loaded profile, per-thread agents, paths."""
 
-    def __init__(self, profile: Profile, engine: EngineSettings, profile_path: Path):
+    def __init__(
+        self,
+        profile: Profile,
+        engine: EngineSettings,
+        profile_path: Path,
+        api_key: ApiKey,
+    ):
         self.profile = profile
         self.engine = engine
         self.profile_path = Path(profile_path).resolve()
+        self.api_key = api_key
         self.runs = RunManager()
         self.agents: dict = {}
         self.agents_lock = asyncio.Lock()
@@ -271,14 +299,33 @@ def create_app(
     profile_path: Path | None = None,
 ) -> FastAPI:
     engine = engine or EngineSettings()
-    state = AppState(profile, engine, profile_path or profile.path)
-    app = FastAPI(title=f"{profile.name} AG-UI server", lifespan=_lifespan)
+    api_key = load_or_create_api_key(engine.data_root, seed=engine.ui_token)
+    state = AppState(profile, engine, profile_path or profile.path, api_key)
+    app = FastAPI(
+        title=f"{profile.name} AG-UI server",
+        version=__version__,
+        description=(
+            f"HTTP API for the {profile.name} agent.\n\n"
+            "Start a conversation with `POST /agui`. The body is an "
+            "[AG-UI RunAgentInput](https://docs.ag-ui.com/concepts/messages) "
+            "and the response is a server-sent event stream. Saved threads, "
+            "workspace files, and the admin editor live on this same server.\n\n"
+            "Send the API key as `Authorization: Bearer <key>` "
+            "(or `?token=` on links that cannot set a header). "
+            "The key is created at startup, printed in the server log, and stored in "
+            "`<data-root>/api_key`. `POST /admin/api-key` replaces it. "
+            "`/admin` routes use `HARNESS_ADMIN_TOKEN` instead of the API key."
+        ),
+        servers=[{"url": "/", "description": profile.name}],
+        openapi_tags=OPENAPI_TAGS,
+        lifespan=_lifespan,
+    )
     app.state.harness = state
     ui_root = _usable_ui_dir(engine.ui_dir)
 
     app.add_middleware(
         _TokenMiddleware,
-        token=engine.ui_token,
+        api_key=api_key,
         skip_prefixes=("/admin",),
         ui_dir=ui_root,
     )
@@ -321,12 +368,31 @@ def create_app(
         }
         path.write_text(json.dumps(payload, ensure_ascii=False))
 
-    @app.get("/profile")
+    @app.get("/profile", tags=[PROFILE], summary="Profile shown in the chat UI")
     async def get_profile():
+        """Name, model, effort levels, and UI copy for the loaded profile."""
         return state.profile.ui_config()
 
-    @app.post("/agui")
+    @app.post(
+        "/agui",
+        tags=[RUNS],
+        summary="Start a run",
+        response_class=EventStreamResponse,
+        response_description=(
+            "AG-UI events for this run. Disconnecting does not cancel the agent; "
+            "reattach with GET /agui/{thread_id}/attach."
+        ),
+        responses={
+            409: {"description": "A run is already active for this thread."},
+            422: {"description": "The body is not a valid AG-UI RunAgentInput."},
+        },
+    )
     async def agui_run(request: Request):
+        """Start an agent run and stream its AG-UI events.
+
+        The body is a `RunAgentInput`. `forwardedProps.effort` overrides reasoning
+        effort for this run. The HTTP response only attaches to the run.
+        """
         try:
             body = await request.json()
             thread_id = body.get("threadId") or body.get("thread_id") or "default"
@@ -405,22 +471,41 @@ def create_app(
             )
         return StreamingResponse(run.attach(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
-    @app.get("/agui/{thread_id}/attach")
+    @app.get(
+        "/agui/{thread_id}/attach",
+        tags=[RUNS],
+        summary="Reattach to a run",
+        response_class=EventStreamResponse,
+        response_description="AG-UI events from the start of the active run, then live events.",
+        responses={404: {"description": "This thread has no run to attach to."}},
+    )
     async def agui_attach(thread_id: str):
+        """Replay the buffered event stream for the thread's active run, then follow it."""
         run = state.runs.get(thread_id)
         if run is None:
             return JSONResponse({"detail": "no run for this thread"}, status_code=404)
         return StreamingResponse(run.attach(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
-    @app.get("/runs/{thread_id}")
+    @app.get("/runs/{thread_id}", tags=[RUNS], summary="Run status")
     async def run_status(thread_id: str):
+        """Whether this thread has a run, and that run's id, timing, and error."""
         run = state.runs.get(thread_id)
         if run is None:
             return {"active": False}
         return run.status()
 
-    @app.get("/events/{thread_id}")
+    @app.get(
+        "/events/{thread_id}",
+        tags=[EVENTS],
+        summary="Tool activity stream",
+        response_class=EventStreamResponse,
+        response_description=(
+            "A summary frame, then the stored tool events, then live events. "
+            "Comments of the form `: ping` are keepalives."
+        ),
+    )
     async def tool_events(thread_id: str):
+        """Stream tool-call activity for one thread."""
         queue = await hub.subscribe(thread_id)
         history = hub.replay(thread_id)
         summary = hub.summary(thread_id)
@@ -451,8 +536,13 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    @app.get("/workspace/{thread_id}/files")
+    @app.get(
+        "/workspace/{thread_id}/files",
+        tags=[WORKSPACE],
+        summary="List workspace files",
+    )
     async def workspace_files(thread_id: str):
+        """Files the agent wrote under this thread's workspace, excluding dotfiles."""
         root = state.workspaces_root / _safe_id(thread_id)
         entries = []
         if root.exists():
@@ -470,8 +560,9 @@ def create_app(
                 )
         return {"root": str(root), "files": entries}
 
-    @app.get("/threads")
+    @app.get("/threads", tags=[THREADS], summary="List saved threads")
     async def list_threads():
+        """Saved conversations, newest first, plus the profile's default model and effort."""
         threads = []
         for conv in state.threads_dir.glob("*/conversation.json"):
             try:
@@ -495,8 +586,9 @@ def create_app(
             "default_effort": state.profile.model.effort,
         }
 
-    @app.get("/threads/{thread_id}")
+    @app.get("/threads/{thread_id}", tags=[THREADS], summary="Load a thread")
     async def get_thread(thread_id: str):
+        """Saved transcript for one thread. A missing thread returns an empty transcript."""
         path = _conversation_path(thread_id)
         if not path.exists():
             return {
@@ -507,19 +599,24 @@ def create_app(
             }
         return json.loads(path.read_text())
 
-    @app.put("/threads/{thread_id}")
-    async def save_thread(thread_id: str, request: Request):
-        body = await request.json()
-        effort = body.get("effort")
+    @app.put("/threads/{thread_id}", tags=[THREADS], summary="Save a thread")
+    async def save_thread(thread_id: str, body: SaveThreadBody):
+        """Replace the saved transcript. Effort is updated only when the body includes it."""
         _persist_conversation(
             thread_id,
-            body.get("messages", []),
-            effort=coerce_effort(effort) if effort is not None else None,
+            body.messages,
+            effort=coerce_effort(body.effort) if body.effort is not None else None,
         )
         return {"ok": True}
 
-    @app.delete("/threads/{thread_id}")
+    @app.delete(
+        "/threads/{thread_id}",
+        tags=[THREADS],
+        summary="Delete a thread",
+        responses={409: {"description": "The thread's run is still active."}},
+    )
     async def delete_thread(thread_id: str):
+        """Delete the conversation, its tool log, and its workspace."""
         run = state.runs.get(thread_id)
         if run is not None and run.active:
             return JSONResponse(
@@ -533,6 +630,7 @@ def create_app(
         return {"ok": True}
 
     admin.mount(app, state)
+    install_openapi(app)
     app.mount(
         "/workspace/raw",
         StaticFiles(directory=str(state.workspaces_root)),
@@ -566,11 +664,13 @@ def _app_from_env():
     profile_path = Path(path).expanduser()
     load_dotenv(profile_path / ".env")
     engine = EngineSettings()
-    return create_app(
+    app = create_app(
         profile_mod.load(profile_path, settings=engine),
         engine=engine,
         profile_path=profile_path,
     )
+    print(f"[bizharness] api key: {app.state.harness.api_key.value}", file=sys.stderr)
+    return app
 
 
 app = _app_from_env()

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { AgentSubscriber, Message } from "@ag-ui/client";
 import {
   activateThread,
@@ -11,7 +11,11 @@ import {
   deleteThread,
   fetchRunStatus,
   fetchProfile,
+  getApiKey,
   listThreads,
+  setApiKey,
+  setUnauthorizedHandler,
+  subscribeApiKey,
   shortModelName,
   subscribeToolEvents,
   coerceEffort,
@@ -28,7 +32,7 @@ import Chat from "./components/Chat";
 import Threads from "./components/Threads";
 import Assets from "./components/Assets";
 import Admin from "./components/Admin";
-import Modal, { btnDanger, btnGhost } from "./components/Modal";
+import Modal, { btnDanger, btnGhost, btnPrimary, SecretInput } from "./components/Modal";
 import { redactEnabled, setRedactTerms } from "./redact";
 import "./App.css";
 
@@ -110,8 +114,24 @@ export default function App() {
   const [profile, setProfile] = useState<ProfileConfig | null>(null);
   const [view, setView] = useState<"chat" | "admin">("chat");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [signedIn, setSignedIn] = useState(() => !!getApiKey());
+  const [apiKeyEpoch, setApiKeyEpoch] = useState(0);
+  const [keyInput, setKeyInput] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  useEffect(() => subscribeApiKey(() => setApiKeyEpoch((n) => n + 1)), []);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setApiKey("");
+      setSignedIn(false);
+      setLoginError("That API key is no longer valid. Sign in with the current one.");
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) return;
     fetchProfile()
       .then((p) => {
         setRedactTerms(p.redact_terms ?? []);
@@ -121,7 +141,7 @@ export default function App() {
         setDefaultEffort(fromProfile);
       })
       .catch(() => {});
-  }, []);
+  }, [signedIn]);
 
   // Data-call counter for the banner: every individual data-source read in
   // this thread (each function inside a code-tool block counts, not the
@@ -255,6 +275,7 @@ export default function App() {
   // On mount: restore this tab's conversation from the server + thread list,
   // and pick up a run that survived the reload.
   useEffect(() => {
+    if (!signedIn) return;
     activateThread(agent.threadId)
       .then(({ messages, effort: stored }) => {
         setMessages(messages);
@@ -263,17 +284,49 @@ export default function App() {
       })
       .catch((e) => setRunError(`Could not restore this conversation:\n${errText(e)}`));
     refreshThreads();
-  }, [refreshThreads, syncRunState]);
+  }, [signedIn, refreshThreads, syncRunState]);
 
   // Bridge tool-event feed follows the active thread (server replays the
   // stored tail on subscribe, so tool detail survives refreshes too).
   useEffect(() => {
+    if (!signedIn) return;
     setFeedSummary(null);
     setLiveUsage([]);
     return subscribeToolEvents(threadId, setActivities, setFeedSummary, (r) =>
       setLiveUsage((prev) => [...prev, r]),
     );
-  }, [threadId]);
+  }, [signedIn, threadId, apiKeyEpoch]);
+
+  const signIn = async (e: FormEvent) => {
+    e.preventDefault();
+    const key = keyInput.trim();
+    if (!key) return;
+    setSigningIn(true);
+    setLoginError(null);
+    setApiKey(key);
+    try {
+      const p = await fetchProfile();
+      setRedactTerms(p.redact_terms ?? []);
+      setProfile(p);
+      document.title = p.title;
+      setDefaultEffort(coerceEffort(p.default_effort));
+      setKeyInput("");
+      setSignedIn(true);
+    } catch {
+      setApiKey("");
+      setLoginError("That API key was rejected.");
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const signOut = () => {
+    setApiKey("");
+    setSignedIn(false);
+    setProfile(null);
+    setLoginError(null);
+    setKeyInput("");
+  };
 
   /** Stop following the current thread's run in this tab. The run keeps
    *  executing detached on the server; coming back re-attaches to it. */
@@ -381,6 +434,32 @@ export default function App() {
     }
   };
 
+  if (!signedIn) {
+    return (
+      <div className="app flex items-center justify-center p-8">
+        <form
+          className="w-full max-w-[420px] rounded-[10px] border border-line bg-pane p-6 shadow-[0_1px_2px_rgba(24,38,32,0.05),0_2px_8px_rgba(24,38,32,0.04)]"
+          onSubmit={signIn}
+        >
+          <h1 className="mb-1 text-[19px] font-semibold text-ink">Sign in</h1>
+          <p className="mb-3 text-[15px] leading-relaxed text-muted">
+            Enter the API key printed when the server started. The same key authorizes API
+            requests.
+          </p>
+          <SecretInput value={keyInput} onChange={setKeyInput} placeholder="API key" />
+          <button
+            type="submit"
+            className={`${btnPrimary} mt-3 w-full`}
+            disabled={signingIn || !keyInput.trim()}
+          >
+            Sign in
+          </button>
+          {loginError && <p className="mt-3 mb-0 text-[14px] text-danger">{loginError}</p>}
+        </form>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -440,6 +519,9 @@ export default function App() {
             onClick={() => setView("admin")}
           >
             Admin
+          </button>
+          <button className="ghost" onClick={signOut}>
+            Sign out
           </button>
         </nav>
       </header>

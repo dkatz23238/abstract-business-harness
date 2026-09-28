@@ -51,6 +51,7 @@ def cmd_serve(args) -> None:
         f"[bizharness] profile={profile.id} model={profile.model.spec} "
         f"data={profile.data_dir} port={args.port}"
     )
+    print(f"[bizharness] api key: {app.state.harness.api_key.value}", file=sys.stderr)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

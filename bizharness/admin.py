@@ -15,13 +15,26 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
 from . import plugins, profile as profile_mod
+from .api_docs import ADMIN, EnvValueBody, text_request_body
 from .profile import ProfileError, delete_secret, write_secret
 
 
 _ALLOWED_SKILL = "SKILL.md"
 _PREVIEW_CHARS = 240
+
+
+class ApiKeyResponse(BaseModel):
+    """The API key that replaced the previous one."""
+
+    api_key: str = Field(
+        description=(
+            "New API key. The previous key is rejected immediately. "
+            "Send it as `Authorization: Bearer` or `?token=`."
+        )
+    )
 
 
 def _preview(text: str, n: int = _PREVIEW_CHARS) -> str:
@@ -83,9 +96,21 @@ def _validate_copy(src: Path) -> list[str]:
     return []
 
 
+_INSTRUCTIONS_EXAMPLE = "Write the report in the house style.\n\n{{ core.execution }}\n"
+_TOML_EXAMPLE = '[profile]\nname = "Example Agent"\ndescription = "A sample profile."\n'
+_TOOL_EXAMPLE = (
+    'def get_post(post_id: int) -> dict:\n    """Fetch one post."""\n    return {"id": post_id}\n'
+)
+_SKILL_EXAMPLE = (
+    "---\nname: filing-review\ndescription: Review one filing.\n---\n\n"
+    "Review one filing at a time.\n"
+)
+
+
 def mount(app: FastAPI, state) -> None:
-    @app.get("/admin/profile")
+    @app.get("/admin/profile", tags=[ADMIN], summary="Profile editor snapshot")
     async def admin_get(request: Request):
+        """Toml, instruction preview, tools, skills, and env status for the loaded profile."""
         if err := _require_admin(request, state.engine.admin_token):
             return err
         p = state.profile
@@ -120,23 +145,70 @@ def mount(app: FastAPI, state) -> None:
             "env": p.env_status(),
         }
 
-    @app.post("/admin/profile/reload")
+    @app.post(
+        "/admin/api-key",
+        tags=[ADMIN],
+        summary="Rotate the API key",
+        response_model=ApiKeyResponse,
+    )
+    async def rotate_api_key(request: Request):
+        """Replace the API key used by the chat UI and by API clients.
+
+        The new key is returned once. It is also written to `<data-root>/api_key`.
+        """
+        if err := _require_admin(request, state.engine.admin_token):
+            return err
+        return {"api_key": state.api_key.rotate()}
+
+    @app.post("/admin/profile/reload", tags=[ADMIN], summary="Reload the profile from disk")
     async def admin_reload(request: Request):
+        """Re-read the profile directory and drop cached agents. This route has no body."""
         if err := _require_admin(request, state.engine.admin_token):
             return err
         p = state.reload_from_disk()
         return {"ok": True, "hash": p.hash}
 
-    @app.get("/admin/profile/profile.toml")
+    @app.get(
+        "/admin/profile/profile.toml",
+        tags=[ADMIN],
+        summary="Read profile.toml",
+        response_class=PlainTextResponse,
+    )
     async def get_toml(request: Request):
+        """Raw `profile.toml` for the loaded profile."""
         return _get_text(request, state, "profile.toml")
 
-    @app.get("/admin/profile/instructions.md")
+    @app.get(
+        "/admin/profile/instructions.md",
+        tags=[ADMIN],
+        summary="Read instructions.md",
+        response_class=PlainTextResponse,
+    )
     async def get_instructions(request: Request):
+        """Raw `instructions.md` template, including `{{ core.* }}` placeholders."""
         return _get_text(request, state, "instructions.md")
 
-    @app.post("/admin/profile/render-instructions")
+    @app.post(
+        "/admin/profile/render-instructions",
+        tags=[ADMIN],
+        summary="Preview rendered instructions",
+        response_class=PlainTextResponse,
+        response_description="Instructions after `{{ core.* }}` placeholders are filled in.",
+        responses={
+            422: {
+                "description": (
+                    "The template uses an unknown placeholder or otherwise failed to render."
+                )
+            }
+        },
+        openapi_extra=text_request_body(
+            "UTF-8 `instructions.md` template, including `{{ core.* }}` placeholders. "
+            "The response is the text the model would see.",
+            _INSTRUCTIONS_EXAMPLE,
+        ),
+    )
     async def render_instructions(request: Request):
+        """Render an instructions template against the loaded profile without saving it."""
         if err := _require_admin(request, state.engine.admin_token):
             return err
         try:
@@ -152,34 +224,81 @@ def mount(app: FastAPI, state) -> None:
             )
         return PlainTextResponse(rendered)
 
-    @app.get("/admin/profile/tools/{name}")
+    @app.get(
+        "/admin/profile/tools/{name}",
+        tags=[ADMIN],
+        summary="Read a tool module",
+        response_class=PlainTextResponse,
+    )
     async def get_tool(name: str, request: Request):
+        """Python source for one file in the profile's `tools/` directory."""
         if not name.endswith(".py") or "/" in name or name.startswith("."):
             return JSONResponse({"detail": "invalid tool name"}, status_code=400)
         return _get_text(request, state, f"tools/{name}")
 
-    @app.get("/admin/profile/skills/{skill}/SKILL.md")
+    @app.get(
+        "/admin/profile/skills/{skill}/SKILL.md",
+        tags=[ADMIN],
+        summary="Read a skill",
+        response_class=PlainTextResponse,
+    )
     async def get_skill(skill: str, request: Request):
+        """`SKILL.md` for one skill directory."""
         if "/" in skill or skill.startswith("."):
             return JSONResponse({"detail": "invalid skill name"}, status_code=400)
         return _get_text(request, state, f"skills/{skill}/{_ALLOWED_SKILL}")
 
-    @app.put("/admin/profile/instructions.md")
+    @app.put(
+        "/admin/profile/instructions.md",
+        tags=[ADMIN],
+        summary="Replace instructions.md",
+        responses={
+            422: {"description": "The template failed validation against a copy of the profile."}
+        },
+        openapi_extra=text_request_body(
+            "Full UTF-8 replacement for `instructions.md`. Validated, then saved and reloaded.",
+            _INSTRUCTIONS_EXAMPLE,
+        ),
+    )
     async def put_instructions(request: Request):
+        """Replace `instructions.md`. The previous file is copied into `_history/`."""
         return await _put_text(request, state, "instructions.md")
 
-    @app.put("/admin/profile/profile.toml")
+    @app.put(
+        "/admin/profile/profile.toml",
+        tags=[ADMIN],
+        summary="Replace profile.toml",
+        responses={
+            422: {"description": "The toml failed validation against a copy of the profile."}
+        },
+        openapi_extra=text_request_body(
+            "Full UTF-8 replacement for `profile.toml`. Validated, then saved and reloaded.",
+            _TOML_EXAMPLE,
+        ),
+    )
     async def put_toml(request: Request):
+        """Replace `profile.toml`. The previous file is copied into `_history/`."""
         return await _put_text(request, state, "profile.toml")
 
-    @app.put("/admin/profile/tools/{name}")
+    @app.put(
+        "/admin/profile/tools/{name}",
+        tags=[ADMIN],
+        summary="Write a tool module",
+        responses={422: {"description": "The module failed to import from a copy of the profile."}},
+        openapi_extra=text_request_body(
+            "Full UTF-8 Python source for `tools/{name}`. `name` must be a single `*.py` filename.",
+            _TOOL_EXAMPLE,
+        ),
+    )
     async def put_tool(name: str, request: Request):
+        """Create or replace one tool module. The previous file is copied into `_history/`."""
         if not name.endswith(".py") or "/" in name or name.startswith("."):
             return JSONResponse({"detail": "invalid tool name"}, status_code=400)
         return await _put_text(request, state, f"tools/{name}")
 
-    @app.delete("/admin/profile/tools/{name}")
+    @app.delete("/admin/profile/tools/{name}", tags=[ADMIN], summary="Delete a tool module")
     async def delete_tool(name: str, request: Request):
+        """Delete one tool module and reload. The previous file is copied into `_history/`."""
         if err := _require_admin(request, state.engine.admin_token):
             return err
         if not name.endswith(".py") or "/" in name:
@@ -192,31 +311,55 @@ def mount(app: FastAPI, state) -> None:
         state.reload_from_disk()
         return {"ok": True}
 
-    @app.put("/admin/profile/skills/{skill}/SKILL.md")
+    @app.put(
+        "/admin/profile/skills/{skill}/SKILL.md",
+        tags=[ADMIN],
+        summary="Write a skill",
+        responses={
+            422: {"description": "The skill failed validation against a copy of the profile."}
+        },
+        openapi_extra=text_request_body(
+            "Full UTF-8 replacement for `skills/{skill}/SKILL.md`.",
+            _SKILL_EXAMPLE,
+        ),
+    )
     async def put_skill(skill: str, request: Request):
+        """Create or replace one skill file. The previous file is copied into `_history/`."""
         if "/" in skill or skill.startswith("."):
             return JSONResponse({"detail": "invalid skill name"}, status_code=400)
         return await _put_text(request, state, f"skills/{skill}/{_ALLOWED_SKILL}")
 
-    @app.get("/admin/profile/env")
+    @app.get("/admin/profile/env", tags=[ADMIN], summary="Environment variable status")
     async def env_list(request: Request):
+        """Which declared variables are set, and where the value comes from.
+
+        Values themselves are omitted.
+        """
         if err := _require_admin(request, state.engine.admin_token):
             return err
         return {"env": state.profile.env_status()}
 
-    @app.put("/admin/profile/env/{name}")
-    async def env_set(name: str, request: Request):
+    @app.put("/admin/profile/env/{name}", tags=[ADMIN], summary="Set an environment variable")
+    async def env_set(name: str, request: Request, body: EnvValueBody):
+        """Write one variable into the secrets file and reload.
+
+        The audit copy records that the variable changed and leaves the value out.
+        """
         if err := _require_admin(request, state.engine.admin_token):
             return err
-        body = await request.json()
-        value = str(body.get("value", ""))
+        value = body.value
         write_secret(state.profile, name, value)
         _audit(state.profile_path, f"env/{name}", b"(value omitted)\n")
         state.reload_from_disk()
         return {"ok": True, "name": name}
 
-    @app.delete("/admin/profile/env/{name}")
+    @app.delete(
+        "/admin/profile/env/{name}",
+        tags=[ADMIN],
+        summary="Delete an environment variable",
+    )
     async def env_delete(name: str, request: Request):
+        """Remove one variable from the secrets file and reload."""
         if err := _require_admin(request, state.engine.admin_token):
             return err
         delete_secret(state.profile, name)

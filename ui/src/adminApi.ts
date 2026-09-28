@@ -246,6 +246,12 @@ export async function reloadAdminProfile(): Promise<{ ok: boolean; hash: string 
   return (await res.json()) as { ok: boolean; hash: string };
 }
 
+export async function rotateApiKey(): Promise<string> {
+  const res = await adminFetch("/admin/api-key", { method: "POST" });
+  const data = (await res.json()) as { api_key: string };
+  return data.api_key;
+}
+
 export async function deleteAdminTool(name: string): Promise<void> {
   await adminFetch(`/admin/profile/tools/${encodeURIComponent(name)}`, { method: "DELETE" });
 }

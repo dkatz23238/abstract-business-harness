@@ -8,6 +8,63 @@ export const API_URL: string = import.meta.env.DEV
   ? ""
   : ((import.meta.env.VITE_API_URL as string | undefined) ?? "");
 
+/** Same value the server prints at startup. Signs in the UI and authorizes API calls. */
+const API_KEY_STORAGE = "bizharness-api-key";
+
+export function getApiKey(): string {
+  return localStorage.getItem(API_KEY_STORAGE) ?? "";
+}
+
+const apiKeyListeners = new Set<() => void>();
+
+export function setApiKey(key: string): void {
+  const next = key.trim();
+  const prev = getApiKey();
+  if (next) localStorage.setItem(API_KEY_STORAGE, next);
+  else localStorage.removeItem(API_KEY_STORAGE);
+  if (next !== prev) {
+    for (const listener of apiKeyListeners) listener();
+  }
+}
+
+/** So open streams can reconnect with the key from a rotation. */
+export function subscribeApiKey(listener: () => void): () => void {
+  apiKeyListeners.add(listener);
+  return () => apiKeyListeners.delete(listener);
+}
+
+let onUnauthorized: () => void = () => {};
+
+/** Fired when an API call returns 401, so the UI can ask for the key again. */
+export function setUnauthorizedHandler(handler: () => void): void {
+  onUnauthorized = handler;
+}
+
+export function notifyUnauthorized(): void {
+  onUnauthorized();
+}
+
+export function authHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  const key = getApiKey();
+  if (key && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${key}`);
+  return headers;
+}
+
+export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(input, { ...init, headers: authHeaders(init?.headers) });
+  if (res.status === 401) onUnauthorized();
+  return res;
+}
+
+/** EventSource and iframe URLs cannot set a header, so they carry `?token=`. */
+export function urlWithToken(url: string): string {
+  const key = getApiKey();
+  if (!key) return url;
+  const join = url.includes("?") ? "&" : "?";
+  return `${url}${join}token=${encodeURIComponent(key)}`;
+}
+
 export interface ProfileConfig {
   id: string;
   name: string;
@@ -36,7 +93,7 @@ export function coerceEffort(value: unknown, fallback: EffortLevel = DEFAULT_EFF
 }
 
 export async function fetchProfile(): Promise<ProfileConfig> {
-  const res = await fetch(`${API_URL}/profile`);
+  const res = await apiFetch(`${API_URL}/profile`);
   if (!res.ok) throw new Error(`profile failed: ${res.status}`);
   return (await res.json()) as ProfileConfig;
 }
@@ -49,14 +106,14 @@ export interface WorkspaceFile {
 }
 
 export async function fetchWorkspaceFiles(threadId: string): Promise<WorkspaceFile[]> {
-  const res = await fetch(`${API_URL}/workspace/${threadId}/files`);
+  const res = await apiFetch(`${API_URL}/workspace/${threadId}/files`);
   if (!res.ok) throw new Error(`workspace listing failed: ${res.status}`);
   const data = await res.json();
   return data.files as WorkspaceFile[];
 }
 
 export function rawFileUrl(threadId: string, path: string): string {
-  return `${API_URL}/workspace/raw/${threadId}/${path}`;
+  return urlWithToken(`${API_URL}/workspace/raw/${threadId}/${path}`);
 }
 
 // ---- detached run status ----
@@ -72,7 +129,7 @@ export interface RunStatus {
 }
 
 export async function fetchRunStatus(threadId: string): Promise<RunStatus> {
-  const res = await fetch(`${API_URL}/runs/${threadId}`);
+  const res = await apiFetch(`${API_URL}/runs/${threadId}`);
   if (!res.ok) throw new Error(`run status failed: ${res.status}`);
   return (await res.json()) as RunStatus;
 }
@@ -99,7 +156,7 @@ export interface ThreadListing {
 }
 
 export async function listThreads(): Promise<ThreadListing> {
-  const res = await fetch(`${API_URL}/threads`);
+  const res = await apiFetch(`${API_URL}/threads`);
   if (!res.ok) throw new Error(`thread listing failed: ${res.status}`);
   const data = await res.json();
   return {
@@ -125,7 +182,7 @@ export interface ThreadDetail<M = unknown> {
 }
 
 export async function loadThread<M>(threadId: string): Promise<ThreadDetail<M>> {
-  const res = await fetch(`${API_URL}/threads/${threadId}`);
+  const res = await apiFetch(`${API_URL}/threads/${threadId}`);
   if (!res.ok) throw new Error(`thread load failed: ${res.status}`);
   const data = (await res.json()) as ThreadDetail<M>;
   return {
@@ -146,7 +203,7 @@ export async function saveThreadMessages(
   messages: unknown,
   extra?: { effort?: EffortLevel },
 ): Promise<void> {
-  await fetch(`${API_URL}/threads/${threadId}`, {
+  await apiFetch(`${API_URL}/threads/${threadId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages, ...(extra?.effort ? { effort: extra.effort } : {}) }),
@@ -155,7 +212,7 @@ export async function saveThreadMessages(
 
 /** Delete a conversation plus its tool events, plan and workspace files. */
 export async function deleteThread(threadId: string): Promise<void> {
-  const res = await fetch(`${API_URL}/threads/${threadId}`, { method: "DELETE" });
+  const res = await apiFetch(`${API_URL}/threads/${threadId}`, { method: "DELETE" });
   if (!res.ok) {
     const detail = await res.json().then((d) => d.detail).catch(() => res.status);
     throw new Error(`delete failed: ${detail}`);
@@ -242,7 +299,7 @@ export function subscribeToolEvents(
   onSummary?: (summary: ToolFeedSummary) => void,
   onUsage?: (record: UsageRecord) => void,
 ): () => void {
-  const source = new EventSource(`${API_URL}/events/${threadId}`);
+  const source = new EventSource(urlWithToken(`${API_URL}/events/${threadId}`));
   source.onmessage = (msg) => {
     const ev = JSON.parse(msg.data);
     if (ev.phase === "summary") {

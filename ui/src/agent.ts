@@ -13,7 +13,9 @@
 import { HttpAgent, type AgentSubscriber, type Message } from "@ag-ui/client";
 import {
   API_URL,
+  authHeaders,
   loadThread,
+  notifyUnauthorized,
   saveThreadMessages,
   type EffortLevel,
 } from "./api";
@@ -34,15 +36,16 @@ let attachTarget: string | null = null;
 export const agent = new HttpAgent({
   url: `${API_URL}/agui`,
   threadId: initialThreadId(),
-  fetch: (url, init) => {
-    if (attachTarget) {
-      return fetch(attachTarget, {
-        method: "GET",
-        headers: { Accept: "text/event-stream" },
-        signal: init?.signal ?? null,
-      });
-    }
-    return fetch(url, init);
+  fetch: async (url, init) => {
+    const res = attachTarget
+      ? await fetch(attachTarget, {
+          method: "GET",
+          headers: authHeaders({ Accept: "text/event-stream" }),
+          signal: init?.signal ?? null,
+        })
+      : await fetch(url, { ...init, headers: authHeaders(init?.headers) });
+    if (res.status === 401) notifyUnauthorized();
+    return res;
   },
 });
 

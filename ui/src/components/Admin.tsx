@@ -9,6 +9,7 @@ import {
   renderAdminInstructions,
   putAdminText,
   reloadAdminProfile,
+  rotateApiKey,
   setAdminEnv,
   setAdminToken,
   type AdminProfile,
@@ -17,6 +18,7 @@ import {
   type AdminToolEntry,
   type EnvStatus,
 } from "../adminApi";
+import { setApiKey } from "../api";
 import HighlightedEditor from "./HighlightedEditor";
 import Markdown from "./Markdown";
 import Modal, { btnDanger, btnGhost, btnPrimary, inputClass, SecretInput } from "./Modal";
@@ -37,6 +39,8 @@ type Dialog =
   | { kind: "delete-tool"; name: string }
   | { kind: "delete-env"; name: string }
   | { kind: "set-env"; name: string }
+  | { kind: "rotate-key" }
+  | { kind: "rotated-key"; apiKey: string }
   | null;
 
 function navKey(n: Nav): string {
@@ -373,6 +377,7 @@ export default function Admin() {
   const [formName, setFormName] = useState("");
   const [formSecret, setFormSecret] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState(false);
 
   const dirty = filePath(nav) !== null && editor !== saved;
   const lang = editorLang(nav);
@@ -647,6 +652,21 @@ export default function Admin() {
     }
   };
 
+  const confirmRotateKey = async () => {
+    setSaving(true);
+    setFormError(null);
+    try {
+      const apiKey = await rotateApiKey();
+      setApiKey(apiKey);
+      setCopiedKey(false);
+      setDialog({ kind: "rotated-key", apiKey });
+    } catch (err) {
+      setFormError(errText(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const confirmDeleteEnv = async () => {
     if (dialog?.kind !== "delete-env") return;
     setSaving(true);
@@ -816,9 +836,22 @@ export default function Admin() {
                   {profile.id} · {profile.hash.slice(0, 12)}
                 </p>
               </div>
-              <button type="button" className={btnPrimary} onClick={reload} disabled={saving}>
-                Reload from disk
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={btnGhost}
+                  onClick={() => {
+                    setFormError(null);
+                    setDialog({ kind: "rotate-key" });
+                  }}
+                  disabled={saving}
+                >
+                  Rotate API key
+                </button>
+                <button type="button" className={btnPrimary} onClick={reload} disabled={saving}>
+                  Reload from disk
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -1100,6 +1133,57 @@ export default function Admin() {
           </div>
         )}
       </section>
+
+      <Modal
+        open={dialog?.kind === "rotate-key"}
+        title="Rotate API key?"
+        onClose={closeDialog}
+        footer={
+          <>
+            <button type="button" className={btnGhost} onClick={closeDialog}>
+              Cancel
+            </button>
+            <button type="button" className={btnDanger} disabled={saving} onClick={confirmRotateKey}>
+              Rotate
+            </button>
+          </>
+        }
+      >
+        <p className="m-0">
+          The current key stops working immediately, including other browsers signed in with it.
+          This browser switches to the new key.
+        </p>
+        {formError && <p className="mt-2 mb-0 text-[14px] text-danger">{formError}</p>}
+      </Modal>
+
+      <Modal
+        open={dialog?.kind === "rotated-key"}
+        title="New API key"
+        onClose={closeDialog}
+        footer={
+          <button type="button" className={btnPrimary} onClick={closeDialog}>
+            Done
+          </button>
+        }
+      >
+        {dialog?.kind === "rotated-key" && (
+          <>
+            <p className="mt-0 mb-3 text-[14px] text-muted">
+              Copy this key now. The server log prints it again on the next startup.
+            </p>
+            <input className={`${inputClass} font-mono`} readOnly value={dialog.apiKey} />
+            <button
+              type="button"
+              className={`${btnGhost} mt-3`}
+              onClick={() => {
+                navigator.clipboard.writeText(dialog.apiKey).then(() => setCopiedKey(true));
+              }}
+            >
+              {copiedKey ? "Copied" : "Copy"}
+            </button>
+          </>
+        )}
+      </Modal>
 
       <Modal
         open={dialog?.kind === "discard"}

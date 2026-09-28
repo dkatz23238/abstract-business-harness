@@ -9,10 +9,12 @@ Environment:
   HARNESS_DATA_ROOT     where per-profile state and workspaces live
                         (default: <repo>/data). One subdirectory per
                         profile id, so two profiles never share threads.
-  HARNESS_UI_TOKEN      when set, every HTTP request except /admin/* must
-                        present it (Bearer header or ?token=).
+  HARNESS_UI_TOKEN      optional seed for the API key. Used only when
+                        <data-root>/api_key does not exist yet. The key
+                        itself (Bearer header or ?token=) is required on
+                        every route except /admin/*, the docs, and the UI.
   HARNESS_ADMIN_TOKEN   required by the /admin endpoints that rewrite a
-                        profile (independent of HARNESS_UI_TOKEN).
+                        profile (independent of the API key).
                         Unset = admin API disabled entirely.
   HARNESS_UI_ORIGINS    comma-separated CORS origins for the web UI.
   HARNESS_UI_DIR        built web UI (index.html). Default: <repo>/ui/dist

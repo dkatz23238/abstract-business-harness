@@ -12,6 +12,16 @@ is the reusable half of that design. How to write a profile like that one
 (lessons included, no confidential names or figures) is in
 [docs/authoring-profiles.md](docs/authoring-profiles.md).
 
+This is usable for real work, and it is still experimental. Run it on a
+machine you control. A host that can reach customer data, production
+systems, or other material you cannot afford to expose is the wrong place
+for it. The API key is a basic gate, not a reason to put the process
+somewhere sensitive.
+
+A profile tool runs with the same privileges as the engine. Do not add one
+that reads or writes data until you have worked through what it can reach,
+what it can change, and what a wrong or hostile call would do.
+
 ```bash
 uv sync
 uv run bizharness serve --profile profiles/example --port 8811
@@ -48,8 +58,10 @@ A `profile.toml` there is the profile; otherwise `profile/profile.toml` is.
 State goes to `harness-data/` when that directory exists, otherwise `data/`.
 An env value that is an absolute path to a missing file is reread from the
 same filename in the mount, so host paths stored in `profile.toml` still
-find the databases next to the profile. `LOGFIRE_TOKEN` and
-`HARNESS_UI_TOKEN` are optional. The mount has to be writable by uid 1000.
+find the databases next to the profile. `LOGFIRE_TOKEN` is optional.
+`HARNESS_UI_TOKEN`, when set, is only the initial API key if
+`<data-root>/api_key` does not exist yet. The mount has to be writable by
+uid 1000.
 
 ## Layout
 
@@ -98,15 +110,37 @@ bizharness history --profile PATH [session]
 bizharness profile new DIR [--from PATH]
 ```
 
+## API key
+
+Every API route except `/admin/*`, `/docs`, and the built UI files requires
+the API key: `Authorization: Bearer <key>`, or `?token=<key>` when the
+client cannot set a header (the tool-event stream and report iframes).
+
+The first startup writes `<data-root>/api_key` (mode 0600) and prints the
+value. If `HARNESS_UI_TOKEN` is set and the file is missing, that value is
+what gets stored. After the file exists it is the source of truth: changing
+`HARNESS_UI_TOKEN` does not replace it. Delete the file before restart to
+seed a new one from the env var.
+
+The web UI asks for this key on the sign-in screen and keeps it in
+`localStorage`. The same key is what external API clients send.
+
+`POST /admin/api-key` (admin token) replaces the key immediately. The Admin
+tab has a **Rotate API key** button that does this and shows the new value
+once. Other browsers signed in with the old key are signed out.
+
+## Admin
+
 Admin HTTP (Bearer `HARNESS_ADMIN_TOKEN`): rewrite tools/skills/instructions,
-set env values, reload. Writes are validated before they land; previous files
-go to `_history/` under the profile. **Tools are trusted code** — same
-privileges as the engine process. Do not expose the admin token.
+set env values, reload, rotate the API key. Writes are validated before they
+land; previous files go to `_history/` under the profile. **Tools are
+trusted code** — same privileges as the engine process. Do not expose the
+admin token.
 
 The web UI has an **Admin** tab that talks to those endpoints. Unlock with
 the admin token (stored in this tab’s session storage, not in the Vite
 build). Unset `HARNESS_ADMIN_TOKEN` and `/admin` stays 404. `/admin` is
-not gated by `HARNESS_UI_TOKEN` — the two tokens are independent.
+not gated by the API key — the two credentials are independent.
 
 ## License
 
