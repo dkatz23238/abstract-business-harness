@@ -1,0 +1,38 @@
+name: Publish Docker image
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: dkatz23238
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          # Push-only so base-image pulls keep the runner's Docker Hub credentials.
+          scope: dkatz23238/abstract-business-harness@push
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            dkatz23238/abstract-business-harness:main
+            dkatz23238/abstract-business-harness:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
