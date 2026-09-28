@@ -22,6 +22,17 @@ A profile tool runs with the same privileges as the engine. Do not add one
 that reads or writes data until you have worked through what it can reach,
 what it can change, and what a wrong or hostile call would do.
 
+## Docker Hub
+
+Pull the published image instead of building it:
+
+```bash
+docker pull dkatz23238/abstract-business-harness
+```
+
+`latest` tracks `main`. A `sha-<short commit>` tag stays put; pin a deploy
+to that. How to run the container is in [Docker](#docker) below.
+
 ```bash
 uv sync
 uv run bizharness serve --profile profiles/example --port 8811
