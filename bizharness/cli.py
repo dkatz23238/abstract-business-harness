@@ -42,7 +42,7 @@ def _setup_tracing(service_name: str) -> None:
 def cmd_serve(args) -> None:
     import uvicorn
 
-    from .server import create_app
+    from .server import create_app, log_api_key
 
     profile = _load_profile(args)
     _setup_tracing(f"bizharness:{profile.id}")
@@ -51,7 +51,7 @@ def cmd_serve(args) -> None:
         f"[bizharness] profile={profile.id} model={profile.model.spec} "
         f"data={profile.data_dir} port={args.port}"
     )
-    print(f"[bizharness] api key: {app.state.harness.api_key.value}", file=sys.stderr)
+    log_api_key(app)
     uvicorn.run(app, host=args.host, port=args.port)
 
 

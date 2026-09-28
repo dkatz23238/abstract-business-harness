@@ -92,8 +92,21 @@ def _hook_shutdown_signals() -> None:
             return
 
 
+def log_api_key(app: FastAPI) -> None:
+    """Print the API key once for this app.
+
+    The CLI prints it before uvicorn binds. The lifespan prints it for
+    `uvicorn bizharness.server:app`, and skips when the CLI already did.
+    """
+    if getattr(app.state, "api_key_logged", False):
+        return
+    app.state.api_key_logged = True
+    print(f"[bizharness] api key: {app.state.harness.api_key.value}", file=sys.stderr)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
+    log_api_key(app)
     _hook_shutdown_signals()
     yield
     shutdown.set()
@@ -656,21 +669,36 @@ def _usable_ui_dir(ui_dir: Path | None) -> Path | None:
 
 
 # Default module-level app for `uvicorn bizharness.server:app` when
-# HARNESS_PROFILE is set. The CLI uses create_app directly.
-def _app_from_env():
+# HARNESS_PROFILE is set. Built on first use: `bizharness serve` imports
+# this module and then builds its own app, so constructing one at import
+# time printed startup lines twice. The CLI uses create_app directly.
+_env_app: FastAPI | None = None
+
+
+def _app_from_env() -> FastAPI:
+    global _env_app
+    if _env_app is not None:
+        return _env_app
     path = os.environ.get("HARNESS_PROFILE")
     if not path:
-        return FastAPI(title="bizharness (set HARNESS_PROFILE)")
+        _env_app = FastAPI(title="bizharness (set HARNESS_PROFILE)")
+        return _env_app
     profile_path = Path(path).expanduser()
     load_dotenv(profile_path / ".env")
     engine = EngineSettings()
-    app = create_app(
+    _env_app = create_app(
         profile_mod.load(profile_path, settings=engine),
         engine=engine,
         profile_path=profile_path,
     )
-    print(f"[bizharness] api key: {app.state.harness.api_key.value}", file=sys.stderr)
-    return app
+    return _env_app
 
 
-app = _app_from_env()
+class _DeferredApp:
+    """ASGI entry that constructs the env app on the first request."""
+
+    async def __call__(self, scope, receive, send):
+        await _app_from_env()(scope, receive, send)
+
+
+app = _DeferredApp()

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import stat
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -83,3 +87,57 @@ def test_admin_rotate_replaces_the_key(tmp_path, monkeypatch):
 
     reloaded = load_or_create_api_key(tmp_path / "data", seed="ignored")
     assert reloaded.value == new_key
+
+
+def test_serve_prints_api_key_once(tmp_path):
+    """Importing the server with HARNESS_PROFILE set must not print a second key.
+
+    Docker and `bizharness serve` both set that variable, then the CLI builds
+    the app that uvicorn actually runs. Startup used to print from the import
+    and again from the CLI.
+    """
+    dest = tmp_path / "profile"
+    shutil.copytree(EXAMPLE, dest)
+    data = tmp_path / "data"
+    script = tmp_path / "serve_once.py"
+    script.write_text(
+        textwrap.dedent(
+            """\
+            import uvicorn
+            from fastapi.testclient import TestClient
+
+            import bizharness.cli as cli
+
+            def fake_run(app, host, port):
+                with TestClient(app):
+                    pass
+
+            uvicorn.run = fake_run
+
+            class Args:
+                pass
+
+            args = Args()
+            args.profile = %r
+            args.data_root = %r
+            args.host = "127.0.0.1"
+            args.port = 8811
+            cli.cmd_serve(args)
+            """
+            % (str(dest), str(data))
+        )
+    )
+    env = os.environ.copy()
+    env["HARNESS_PROFILE"] = str(dest)
+    env["HARNESS_DATA_ROOT"] = str(data)
+    env.pop("HARNESS_UI_TOKEN", None)
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("[bizharness] api key:") == 1
+    assert result.stdout.count("[bizharness] ui=") <= 1
