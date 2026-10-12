@@ -20,7 +20,7 @@ import {
   type EffortLevel,
 } from "./api";
 
-const THREAD_KEY = "bizharness-thread";
+const THREAD_KEY = "abstract-thread";
 
 export function initialThreadId(): string {
   let id = sessionStorage.getItem(THREAD_KEY);

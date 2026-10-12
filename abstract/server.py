@@ -11,7 +11,7 @@ reload or dropped connection no longer kills the run. The server persists
 the final conversation itself when a run completes, and tool events are
 logged per thread so the timeline survives a refresh.
 
-Run with:  bizharness serve --profile PATH --port 8811
+Run with:  abstract serve --profile PATH --port 8811
 
 Auth: every request except `/admin/*`, the docs pages, and the built UI
 files must carry the API key as `Authorization: Bearer <key>` or
@@ -96,12 +96,12 @@ def log_api_key(app: FastAPI) -> None:
     """Print the API key once for this app.
 
     The CLI prints it before uvicorn binds. The lifespan prints it for
-    `uvicorn bizharness.server:app`, and skips when the CLI already did.
+    `uvicorn abstract.server:app`, and skips when the CLI already did.
     """
     if getattr(app.state, "api_key_logged", False):
         return
     app.state.api_key_logged = True
-    print(f"[bizharness] api key: {app.state.harness.api_key.value}", file=sys.stderr)
+    print(f"[abstract] api key: {app.state.harness.api_key.value}", file=sys.stderr)
 
 
 @contextlib.asynccontextmanager
@@ -662,14 +662,14 @@ def _usable_ui_dir(ui_dir: Path | None) -> Path | None:
         return None
     root = Path(ui_dir).expanduser().resolve()
     if not (root / "index.html").is_file():
-        print(f"[bizharness] UI dir {root} has no index.html; serving API only", file=sys.stderr)
+        print(f"[abstract] UI dir {root} has no index.html; serving API only", file=sys.stderr)
         return None
-    print(f"[bizharness] ui={root}")
+    print(f"[abstract] ui={root}")
     return root
 
 
-# Default module-level app for `uvicorn bizharness.server:app` when
-# HARNESS_PROFILE is set. Built on first use: `bizharness serve` imports
+# Default module-level app for `uvicorn abstract.server:app` when
+# HARNESS_PROFILE is set. Built on first use: `abstract serve` imports
 # this module and then builds its own app, so constructing one at import
 # time printed startup lines twice. The CLI uses create_app directly.
 _env_app: FastAPI | None = None
@@ -681,7 +681,7 @@ def _app_from_env() -> FastAPI:
         return _env_app
     path = os.environ.get("HARNESS_PROFILE")
     if not path:
-        _env_app = FastAPI(title="bizharness (set HARNESS_PROFILE)")
+        _env_app = FastAPI(title="abstract (set HARNESS_PROFILE)")
         return _env_app
     profile_path = Path(path).expanduser()
     load_dotenv(profile_path / ".env")

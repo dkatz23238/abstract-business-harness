@@ -14,8 +14,8 @@ own serialization format, so they can be replayed or post-processed with
 `ModelMessagesTypeAdapter` later.
 
 View:
-    bizharness history --profile PATH            # list sessions
-    bizharness history --profile PATH <name>     # render one as a trace
+    abstract history --profile PATH            # list sessions
+    abstract history --profile PATH <name>     # render one as a trace
 `<name>` may be a filename, a unique prefix, or an index from the listing
 (1 = most recent).
 """

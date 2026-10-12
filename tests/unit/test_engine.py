@@ -1,5 +1,5 @@
-from bizharness.engine import _reasoning_model, model_settings_for_effort
-from bizharness.profile import coerce_effort
+from abstract.engine import _reasoning_model, model_settings_for_effort
+from abstract.profile import coerce_effort
 
 
 def test_openai_chat_spec_uses_responses_api(monkeypatch):

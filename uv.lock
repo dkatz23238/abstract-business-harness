@@ -10,6 +10,41 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "abstract"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "fastapi" },
+    { name = "logfire" },
+    { name = "pandas" },
+    { name = "pydantic-ai-harness", extra = ["code-mode", "skills"] },
+    { name = "pydantic-ai-slim", extra = ["ag-ui", "anthropic", "cli", "openai"] },
+    { name = "requests" },
+    { name = "rich" },
+    { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "logfire", specifier = ">=5.0.0" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "pydantic-ai-harness", extras = ["code-mode", "skills"], specifier = "==0.30.0" },
+    { name = "pydantic-ai-slim", extras = ["ag-ui", "anthropic", "cli", "openai"] },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "requests", specifier = ">=2.31" },
+    { name = "rich", specifier = ">=15.0.0" },
+    { name = "uvicorn", specifier = ">=0.30" },
+]
+
+[[package]]
 name = "ag-ui-protocol"
 version = "0.1.22"
 source = { registry = "https://pypi.org/simple" }
@@ -77,41 +112,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/87/6f/5a73f04007ca950701765949209f068da628bd11f9c2da287278ce91e0ee/argcomplete-3.7.2.tar.gz", hash = "sha256:aad8b69a0b9969edb62db0d1752354c0d50717b10e0cbb00e2a958381b9fc6b9", size = 74473 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/46/bd/551ee6af426af84ca33e02622be722925c196608e9127d731ef17c47f06e/argcomplete-3.7.2-py3-none-any.whl", hash = "sha256:6029205678bdd9c1c728a155f5f9ecf5812393f969eef58807641a2bc2aa5b19", size = 43294 },
-]
-
-[[package]]
-name = "bizharness"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "fastapi" },
-    { name = "logfire" },
-    { name = "pandas" },
-    { name = "pydantic-ai-harness", extra = ["code-mode", "skills"] },
-    { name = "pydantic-ai-slim", extra = ["ag-ui", "anthropic", "cli", "openai"] },
-    { name = "requests" },
-    { name = "rich" },
-    { name = "uvicorn" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "logfire", specifier = ">=5.0.0" },
-    { name = "pandas", specifier = ">=2.2" },
-    { name = "pydantic-ai-harness", extras = ["code-mode", "skills"], specifier = "==0.30.0" },
-    { name = "pydantic-ai-slim", extras = ["ag-ui", "anthropic", "cli", "openai"] },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "requests", specifier = ">=2.31" },
-    { name = "rich", specifier = ">=15.0.0" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]

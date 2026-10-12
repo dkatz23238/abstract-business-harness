@@ -20,23 +20,23 @@ my-profile/
   tools/*.py            # each may expose register(ctx)
   skills/<name>/SKILL.md
   memory_guidance.md    # optional
-  .env                  # gitignored; loaded by `bizharness serve`
+  .env                  # gitignored; loaded by `abstract serve`
 ```
 
 Start from the bundled demo or an empty skeleton:
 
 ```bash
-bizharness profile new ~/my-profile
+abstract profile new ~/my-profile
 # or
-bizharness profile new ~/my-profile --from profiles/example
+abstract profile new ~/my-profile --from profiles/example
 ```
 
 Then:
 
 ```bash
 cp ~/my-profile/.env.example ~/my-profile/.env   # if you added one
-uv run bizharness profile validate --profile ~/my-profile
-uv run bizharness serve --profile ~/my-profile --data-root ~/my-profile/data
+uv run abstract profile validate --profile ~/my-profile
+uv run abstract serve --profile ~/my-profile --data-root ~/my-profile/data
 ```
 
 ## `profile.toml`
@@ -140,7 +140,7 @@ These are engine/product lessons, not a description of any one company’s books
 
 ## Checklist before first serve
 
-- [ ] `bizharness profile validate --profile PATH` is green
+- [ ] `abstract profile validate --profile PATH` is green
 - [ ] Required env is set; `profile env-list` shows sources, not values
 - [ ] Code tool name is specific to the data source
 - [ ] Every tool has a docstring

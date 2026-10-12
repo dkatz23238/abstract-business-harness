@@ -2,7 +2,7 @@
 
 import pytest
 
-from bizharness.usage import estimate_cost
+from abstract.usage import estimate_cost
 
 
 def test_gpt6_luna_standard_list_price():

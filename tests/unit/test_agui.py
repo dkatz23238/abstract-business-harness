@@ -8,9 +8,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from bizharness.config import EngineSettings
-from bizharness.profile import load
-from bizharness.server import _effort_from_forwarded, _run_error_from_sse, create_app
+from abstract.config import EngineSettings
+from abstract.profile import load
+from abstract.server import _effort_from_forwarded, _run_error_from_sse, create_app
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
 

@@ -11,7 +11,7 @@ the delivery policy is fixed once and inherited by every profile, while
 nothing customer-specific leaks into the engine. Every block may use the
 same placeholders a profile can (`{{ code_tool }}`, `{{ data_source }}`,
 `{{ data_tool_examples }}`, `{{ report_extra_sections }}`, …); see
-`bizharness.profile.TEMPLATE_VARS`.
+`abstract.profile.TEMPLATE_VARS`.
 """
 
 from __future__ import annotations

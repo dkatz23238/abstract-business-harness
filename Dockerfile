@@ -20,7 +20,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     PATH="/app/.venv/bin:$PATH"
 
 COPY pyproject.toml uv.lock ./
-COPY bizharness ./bizharness
+COPY abstract ./abstract
 RUN uv sync --frozen --no-dev
 
 COPY --from=ui /src/ui/dist /app/ui

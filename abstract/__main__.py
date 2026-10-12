@@ -1,4 +1,4 @@
-from bizharness.cli import main
+from abstract.cli import main
 
 if __name__ == "__main__":
     main()

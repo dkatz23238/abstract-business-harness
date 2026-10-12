@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from bizharness.profile import ProfileError, load
+from abstract.profile import ProfileError, load
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
 

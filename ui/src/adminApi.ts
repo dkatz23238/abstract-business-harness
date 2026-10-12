@@ -1,6 +1,6 @@
 import { API_URL } from "./api";
 
-const TOKEN_KEY = "bizharness-admin-token";
+const TOKEN_KEY = "abstract-admin-token";
 
 export function getAdminToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? "";

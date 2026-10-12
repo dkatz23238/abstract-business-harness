@@ -9,7 +9,7 @@ export const API_URL: string = import.meta.env.DEV
   : ((import.meta.env.VITE_API_URL as string | undefined) ?? "");
 
 /** Same value the server prints at startup. Signs in the UI and authorizes API calls. */
-const API_KEY_STORAGE = "bizharness-api-key";
+const API_KEY_STORAGE = "abstract-api-key";
 
 export function getApiKey(): string {
   return localStorage.getItem(API_KEY_STORAGE) ?? "";

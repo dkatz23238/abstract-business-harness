@@ -10,7 +10,7 @@ if [ -z "${HARNESS_PROFILE:-}" ]; then
   elif [ -f "$ROOT/profile/profile.toml" ]; then
     HARNESS_PROFILE=$ROOT/profile
   else
-    echo "bizharness: no profile.toml in $ROOT or $ROOT/profile" >&2
+    echo "abstract: no profile.toml in $ROOT or $ROOT/profile" >&2
     exit 1
   fi
   export HARNESS_PROFILE
@@ -28,4 +28,4 @@ if [ -z "${HARNESS_DATA_ROOT:-}" ]; then
   export HARNESS_DATA_ROOT
 fi
 
-exec bizharness serve --host 0.0.0.0 --port 8811 "$@"
+exec abstract serve --host 0.0.0.0 --port 8811 "$@"

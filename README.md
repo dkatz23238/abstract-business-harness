@@ -1,4 +1,4 @@
-# bizharness
+# abstract
 
 ![logo](imgs/abh.png)
 
@@ -35,7 +35,7 @@ to that. How to run the container is in [Docker](#docker) below.
 
 ```bash
 uv sync
-uv run bizharness serve --profile profiles/example --port 8811
+uv run abstract serve --profile profiles/example --port 8811
 # other terminal
 cd ui && npm install && VITE_API_URL=http://localhost:8811 npm run dev
 ```
@@ -50,7 +50,7 @@ OpenAI-compatible server such as OpenRouter
 no-key smoke test, set `[model] spec = "test"`.
 
 A production build of the UI is served by the same process. `npm run build`
-in `ui/` (with `VITE_API_URL` empty) writes `ui/dist`, and `bizharness serve`
+in `ui/` (with `VITE_API_URL` empty) writes `ui/dist`, and `abstract serve`
 then returns that app at `/`. Set `HARNESS_UI_DIR` to point somewhere else.
 
 ## Docker
@@ -59,12 +59,12 @@ The image contains the engine and that UI build. The profile and its state
 stay on the host:
 
 ```bash
-docker build -t bizharness .
+docker build -t abstract .
 docker run --rm -p 8811:8811 \
   -e OPENAI_API_KEY \
   -e HARNESS_ADMIN_TOKEN \
   -v "$HOME/eia-profile:/harness-profile" \
-  bizharness
+  abstract
 ```
 
 Pushes to `main` publish `dkatz23238/abstract-business-harness` as `latest`,
@@ -84,7 +84,7 @@ uid 1000.
 ## Layout
 
 ```
-bizharness/          engine package (CLI: bizharness)
+abstract/            engine package (CLI: abstract)
 profiles/example/    public demo profile
 docs/                authoring guide
 ui/                  AG-UI frontend; strings come from GET /profile
@@ -113,19 +113,19 @@ Environment declared in `[env]` resolves as:
 3. `<data-root>/<id>/secrets.env` (0600, gitignored)
 4. `[env.defaults]` in profile.toml
 
-`bizharness profile validate --profile PATH` prints a report and fails on
+`abstract profile validate --profile PATH` prints a report and fails on
 missing required env or a broken tool module.
 
 ## CLI
 
 ```
-bizharness serve --profile PATH [--port 8811]
-bizharness chat --profile PATH [-p prompt] [-v]
-bizharness profile validate --profile PATH
-bizharness profile env-list --profile PATH
-bizharness profile env-set NAME VALUE --profile PATH
-bizharness history --profile PATH [session]
-bizharness profile new DIR [--from PATH]
+abstract serve --profile PATH [--port 8811]
+abstract chat --profile PATH [-p prompt] [-v]
+abstract profile validate --profile PATH
+abstract profile env-list --profile PATH
+abstract profile env-set NAME VALUE --profile PATH
+abstract history --profile PATH [session]
+abstract profile new DIR [--from PATH]
 ```
 
 ## API key

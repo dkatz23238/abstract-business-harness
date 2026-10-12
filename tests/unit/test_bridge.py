@@ -1,4 +1,4 @@
-from bizharness.bridge import is_data_event
+from abstract.bridge import is_data_event
 
 
 def test_kind_data_and_control():

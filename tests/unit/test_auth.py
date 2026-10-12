@@ -12,10 +12,10 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from bizharness.auth import API_KEY_FILENAME, load_or_create_api_key
-from bizharness.config import EngineSettings
-from bizharness.profile import load
-from bizharness.server import create_app
+from abstract.auth import API_KEY_FILENAME, load_or_create_api_key
+from abstract.config import EngineSettings
+from abstract.profile import load
+from abstract.server import create_app
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
 
@@ -92,7 +92,7 @@ def test_admin_rotate_replaces_the_key(tmp_path, monkeypatch):
 def test_serve_prints_api_key_once(tmp_path):
     """Importing the server with HARNESS_PROFILE set must not print a second key.
 
-    Docker and `bizharness serve` both set that variable, then the CLI builds
+    Docker and `abstract serve` both set that variable, then the CLI builds
     the app that uvicorn actually runs. Startup used to print from the import
     and again from the CLI.
     """
@@ -106,7 +106,7 @@ def test_serve_prints_api_key_once(tmp_path):
             import uvicorn
             from fastapi.testclient import TestClient
 
-            import bizharness.cli as cli
+            import abstract.cli as cli
 
             def fake_run(app, host, port):
                 with TestClient(app):
@@ -139,5 +139,5 @@ def test_serve_prints_api_key_once(tmp_path):
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stderr.count("[bizharness] api key:") == 1
-    assert result.stdout.count("[bizharness] ui=") <= 1
+    assert result.stderr.count("[abstract] api key:") == 1
+    assert result.stdout.count("[abstract] ui=") <= 1

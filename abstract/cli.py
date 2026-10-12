@@ -45,10 +45,10 @@ def cmd_serve(args) -> None:
     from .server import create_app, log_api_key
 
     profile = _load_profile(args)
-    _setup_tracing(f"bizharness:{profile.id}")
+    _setup_tracing(f"abstract:{profile.id}")
     app = create_app(profile, engine=_engine(args), profile_path=Path(args.profile).expanduser())
     print(
-        f"[bizharness] profile={profile.id} model={profile.model.spec} "
+        f"[abstract] profile={profile.id} model={profile.model.spec} "
         f"data={profile.data_dir} port={args.port}"
     )
     log_api_key(app)
@@ -61,13 +61,13 @@ def cmd_chat(args) -> None:
     from .engine import build, model_settings_for_effort
 
     profile = _load_profile(args)
-    _setup_tracing(f"bizharness:{profile.id}")
+    _setup_tracing(f"abstract:{profile.id}")
     built = build(profile, trace_tools=args.verbose)
     limits = UsageLimits(request_limit=profile.model.request_limit)
     effort = args.effort or profile.model.effort
     settings = model_settings_for_effort(effort)
     print(
-        f"[bizharness] profile={profile.id} model={profile.model.spec} "
+        f"[abstract] profile={profile.id} model={profile.model.spec} "
         f"effort={effort} workspace={built.workspace}"
     )
     if args.prompt:
@@ -77,7 +77,7 @@ def cmd_chat(args) -> None:
         print(result.output)
         return
     built.agent.to_cli_sync(
-        prog_name=f"bizharness:{profile.id}",
+        prog_name=f"abstract:{profile.id}",
         usage_limits=limits,
         model_settings=settings,
     )
@@ -305,7 +305,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     shared.add_argument("--data-root", default=None, help="override HARNESS_DATA_ROOT")
 
-    parser = argparse.ArgumentParser(prog="bizharness", description="Profile-driven analysis agent")
+    parser = argparse.ArgumentParser(prog="abstract", description="Profile-driven analysis agent")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     serve = sub.add_parser("serve", help="AG-UI HTTP server", parents=[shared])

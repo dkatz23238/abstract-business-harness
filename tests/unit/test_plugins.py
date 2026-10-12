@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from bizharness import plugins
-from bizharness.profile import load
+from abstract import plugins
+from abstract.profile import load
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
 
