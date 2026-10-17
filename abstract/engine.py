@@ -74,6 +74,10 @@ from .profile import DEFAULT_EFFORT, Profile, coerce_effort
 # OpenAI-shaped spec is built as the Responses API.
 _OPENAI_SPEC_PREFIXES = ("openai-chat:", "openai-responses:", "openai:")
 _ANTHROPIC_SPEC_PREFIX = "anthropic:"
+# Anthropic requires max_tokens and pydantic-ai defaults it to 4096, which
+# thinking shares with the answer. A write_file call carrying a full HTML
+# report then stops mid-JSON (finish_reason=length) on every retry.
+ANTHROPIC_MAX_TOKENS = 64_000
 
 
 def model_settings_for_effort(effort: str) -> dict:
@@ -109,6 +113,7 @@ def _reasoning_model(model_spec: str, *, effort: str | None = None):
         return (
             AnthropicModel(model_spec.removeprefix(_ANTHROPIC_SPEC_PREFIX)),
             AnthropicModelSettings(
+                max_tokens=ANTHROPIC_MAX_TOKENS,
                 thinking=level,
                 anthropic_cache=True,
                 anthropic_cache_instructions=True,

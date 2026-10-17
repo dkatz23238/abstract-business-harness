@@ -41,6 +41,7 @@ def test_anthropic_spec_gets_thinking_and_caching(monkeypatch):
     assert isinstance(model, AnthropicModel)
     assert model.model_name == "claude-sonnet-5"
     assert settings["thinking"] == "high"
+    assert settings["max_tokens"] == 64_000
     assert settings["anthropic_cache"] is True
     assert settings["anthropic_cache_instructions"] is True
     assert settings["anthropic_cache_tool_definitions"] is True
