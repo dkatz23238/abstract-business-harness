@@ -87,7 +87,7 @@ _AGUI_EXAMPLE = {
     "messages": [{"id": "m1", "role": "user", "content": "Summarize the latest filings."}],
     "tools": [],
     "context": [],
-    "forwardedProps": {"effort": "medium"},
+    "forwardedProps": {"effort": "medium", "model": "openai:gpt-5.6-luna"},
     "state": {},
 }
 
@@ -108,6 +108,15 @@ class SaveThreadBody(BaseModel):
             "`medium`. Omit the field to keep the effort already saved."
         ),
         examples=["high"],
+    )
+    model: str | None = Field(
+        default=None,
+        description=(
+            "Model spec to store for later runs on this thread. Must be one of the "
+            "profile's `model_choices`; any other value stores the profile default. "
+            "Omit the field to keep the model already saved."
+        ),
+        examples=["openai:gpt-5.6-luna"],
     )
 
 

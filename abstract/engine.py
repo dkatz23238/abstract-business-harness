@@ -73,6 +73,7 @@ from .profile import DEFAULT_EFFORT, Profile, coerce_effort
 # model's reasoning with function tools. The engine always has tools, so every
 # OpenAI-shaped spec is built as the Responses API.
 _OPENAI_SPEC_PREFIXES = ("openai-chat:", "openai-responses:", "openai:")
+_ANTHROPIC_SPEC_PREFIX = "anthropic:"
 
 
 def model_settings_for_effort(effort: str) -> dict:
@@ -94,9 +95,26 @@ def _reasoning_model(model_spec: str, *, effort: str | None = None):
     plain "openai:<name>" strings — which resolve to Chat Completions — never
     produce any. Built explicitly, the summaries stream as ThinkingParts,
     which the AG-UI adapter forwards to the frontend as THINKING events and
-    the CLI trace prints. Non-OpenAI specs pass through unchanged.
+    the CLI trace prints.
+
+    Anthropic specs get adaptive thinking at the same effort level (summaries
+    are Anthropic's default) and prompt caching. A long session resends the
+    instructions, tool schemas and history on every step, so caching is most
+    of the cost. Other specs pass through unchanged.
     """
     level = coerce_effort(effort, default=DEFAULT_EFFORT)
+    if model_spec.startswith(_ANTHROPIC_SPEC_PREFIX):
+        from pydantic_ai.models.anthropic import AnthropicModel, AnthropicModelSettings
+
+        return (
+            AnthropicModel(model_spec.removeprefix(_ANTHROPIC_SPEC_PREFIX)),
+            AnthropicModelSettings(
+                thinking=level,
+                anthropic_cache=True,
+                anthropic_cache_instructions=True,
+                anthropic_cache_tool_definitions=True,
+            ),
+        )
     for prefix in _OPENAI_SPEC_PREFIXES:
         if model_spec.startswith(prefix):
             from pydantic_ai.models.openai import (
@@ -119,6 +137,16 @@ def _reasoning_model(model_spec: str, *, effort: str | None = None):
                 ),
             )
     return model_spec, None
+
+
+def run_model(model_spec: str, effort: str):
+    """Model and per-run settings for one run on `model_spec` at `effort`.
+
+    Passed to `agent.run(model=..., model_settings=...)` so a chat can switch
+    between the profile's model choices without rebuilding the agent.
+    """
+    model, settings = _reasoning_model(model_spec, effort=effort)
+    return model, {**(settings or {}), **model_settings_for_effort(effort)}
 
 
 @dataclass

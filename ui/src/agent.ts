@@ -64,16 +64,19 @@ export async function attachToRun(subscriber?: AgentSubscriber): Promise<void> {
 /** Point the agent at another thread and load its stored conversation. */
 export async function activateThread(
   threadId: string,
-): Promise<{ messages: Message[]; effort: string | null }> {
+): Promise<{ messages: Message[]; effort: string | null; model: string | null }> {
   const thread = await loadThread<Message>(threadId);
   agent.threadId = threadId;
   agent.setMessages(thread.messages);
   sessionStorage.setItem(THREAD_KEY, threadId);
-  return { messages: thread.messages, effort: thread.effort ?? null };
+  return { messages: thread.messages, effort: thread.effort ?? null, model: thread.model ?? null };
 }
 
 /** Persist the current conversation server-side. */
-export async function persistConversation(extra?: { effort?: EffortLevel }): Promise<void> {
+export async function persistConversation(extra?: {
+  effort?: EffortLevel;
+  model?: string;
+}): Promise<void> {
   await saveThreadMessages(agent.threadId, agent.messages, extra);
 }
 

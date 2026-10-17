@@ -60,7 +60,7 @@ from .api_docs import (
 )
 from .bridge import NestedCallBridge, hub, safe_id as _safe_id
 from .config import EngineSettings, load_dotenv
-from .engine import model_settings_for_effort
+from .engine import run_model
 from .profile import Profile, coerce_effort
 from .runs import RunActiveError, RunManager, ThreadRun, next_or_shutdown, shutdown
 from .usage import UsageMeter, summary as usage_summary
@@ -292,6 +292,14 @@ def _effort_from_forwarded(props: object, *, default: str) -> str:
     return default
 
 
+def _model_from_forwarded(props: object, *, profile: Profile, default: str | None) -> str:
+    """Read `model` out of AG-UI forwardedProps; only the profile's choices count."""
+    fallback = profile.model.pick(default)
+    if isinstance(props, dict) and props.get("model") in profile.model.options:
+        return props["model"]
+    return fallback
+
+
 def _title_from_messages(messages: list) -> str:
     for m in messages:
         if isinstance(m, dict) and m.get("role") == "user":
@@ -404,7 +412,8 @@ def create_app(
         """Start an agent run and stream its AG-UI events.
 
         The body is a `RunAgentInput`. `forwardedProps.effort` overrides reasoning
-        effort for this run. The HTTP response only attaches to the run.
+        effort for this run, and `forwardedProps.model` picks one of the
+        profile's `model_choices`. The HTTP response only attaches to the run.
         """
         try:
             body = await request.json()
@@ -425,17 +434,22 @@ def create_app(
         run_id = getattr(adapter.run_input, "run_id", None)
         input_messages = list(getattr(adapter.run_input, "messages", []) or [])
         limits = UsageLimits(request_limit=state.profile.model.request_limit)
-        stored_effort = None
+        stored: dict = {}
         conv_path = _conversation_path(thread_id)
         if conv_path.exists():
             try:
-                stored_effort = json.loads(conv_path.read_text()).get("effort")
+                stored = json.loads(conv_path.read_text())
             except ValueError:
-                stored_effort = None
+                stored = {}
+        forwarded = getattr(adapter.run_input, "forwarded_props", None)
         effort = _effort_from_forwarded(
-            getattr(adapter.run_input, "forwarded_props", None),
-            default=coerce_effort(stored_effort, default=state.profile.model.effort),
+            forwarded,
+            default=coerce_effort(stored.get("effort"), default=state.profile.model.effort),
         )
+        model_spec = _model_from_forwarded(
+            forwarded, profile=state.profile, default=stored.get("model")
+        )
+        model, model_settings = run_model(model_spec, effort)
 
         async def execute(run: ThreadRun) -> None:
             captured: dict = {}
@@ -449,7 +463,8 @@ def create_app(
                     usage_limits=limits,
                     capabilities=[bridge, meter],
                     on_complete=on_complete,
-                    model_settings=model_settings_for_effort(effort),
+                    model=model,
+                    model_settings=model_settings,
                 )
                 async for chunk in adapter.encode_stream(events):
                     run.append(chunk)
@@ -470,7 +485,7 @@ def create_app(
                                 m.model_dump(mode="json", by_alias=True)
                                 for m in [*input_messages, *new_messages]
                             ],
-                            model=state.profile.model.spec,
+                            model=model_spec,
                             effort=effort,
                         )
                     except Exception as persist_exc:
@@ -596,6 +611,7 @@ def create_app(
         return {
             "threads": threads,
             "default_model": state.profile.model.spec,
+            "model_choices": state.profile.model.options,
             "default_effort": state.profile.model.effort,
         }
 
@@ -608,16 +624,18 @@ def create_app(
                 "id": thread_id,
                 "title": "",
                 "messages": [],
+                "model": state.profile.model.spec,
                 "effort": state.profile.model.effort,
             }
         return json.loads(path.read_text())
 
     @app.put("/threads/{thread_id}", tags=[THREADS], summary="Save a thread")
     async def save_thread(thread_id: str, body: SaveThreadBody):
-        """Replace the saved transcript. Effort is updated only when the body includes it."""
+        """Replace the saved transcript. Effort and model are updated only when the body includes them."""
         _persist_conversation(
             thread_id,
             body.messages,
+            model=state.profile.model.pick(body.model) if body.model is not None else None,
             effort=coerce_effort(body.effort) if body.effort is not None else None,
         )
         return {"ok": True}

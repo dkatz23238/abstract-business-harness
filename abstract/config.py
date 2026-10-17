@@ -23,6 +23,7 @@ Environment:
   OPENAI_BASE_URL       optional base URL for OpenAI-compatible `openai:`
                         specs. Unset uses https://api.openai.com/v1.
                         Example: https://openrouter.ai/api/v1
+  ANTHROPIC_API_KEY     key for `anthropic:` specs.
 """
 
 from __future__ import annotations

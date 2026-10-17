@@ -89,13 +89,15 @@ def estimate_cost(
     input_tokens: int,
     output_tokens: int,
     cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
     overrides: dict[str, dict[str, float]] | None = None,
 ) -> float | None:
     """USD list price for one request, or None when the model is unknown.
 
-    `input_tokens` is the provider's total input count (cached tokens
-    included, as OpenAI reports it); the cached part is billed at the
-    cache-read rate when the price table has one.
+    `input_tokens` is the total input count with cached tokens included
+    (pydantic-ai normalizes Anthropic's split counts to this shape); the
+    cached part is billed at the cache-read rate when the price table has one.
+    Cache writes (Anthropic) are priced only through genai-prices.
     """
     name = _strip_provider(model)
     override = (overrides or {}).get(name) or (overrides or {}).get(model)
@@ -113,6 +115,7 @@ def estimate_cost(
                 _PriceUsage(
                     input_tokens=input_tokens,
                     cache_read_tokens=cache_read_tokens,
+                    cache_write_tokens=cache_write_tokens,
                     output_tokens=output_tokens,
                 ),
                 model_ref=name,
@@ -197,6 +200,7 @@ def summary(
                 input_tokens=int(r.get("input_tokens", 0)),
                 output_tokens=int(r.get("output_tokens", 0)),
                 cache_read_tokens=int(r.get("cache_read_tokens", 0)),
+                cache_write_tokens=int(r.get("cache_write_tokens", 0)),
                 overrides=overrides,
             )
         if cost is None:
@@ -271,6 +275,7 @@ class UsageMeter(AbstractCapability):
                 input_tokens=record["input_tokens"],
                 output_tokens=record["output_tokens"],
                 cache_read_tokens=record["cache_read_tokens"],
+                cache_write_tokens=record["cache_write_tokens"],
                 overrides=self._overrides,
             )
         record["cost_usd"] = cost

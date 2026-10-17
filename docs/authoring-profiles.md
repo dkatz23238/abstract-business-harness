@@ -44,7 +44,7 @@ uv run abstract serve --profile ~/my-profile --data-root ~/my-profile/data
 | Section | What it is |
 |---|---|
 | `[profile]` | `id`, `name`, `description` |
-| `[model]` | `spec` (e.g. `openai:gpt-5.6-luna` or `test`), `request_limit`, optional `effort` (`low`/`medium`/`high`/`xhigh`, default `medium`), optional `[model.prices]`. An `openai:` spec calls `https://api.openai.com/v1` unless `OPENAI_BASE_URL` points it at an OpenAI-compatible server (OpenRouter: `https://openrouter.ai/api/v1`). |
+| `[model]` | `spec` (e.g. `openai:gpt-5.6-luna`, `anthropic:claude-sonnet-5`, or `test`), `request_limit`, optional `effort` (`low`/`medium`/`high`/`xhigh`, default `medium`), optional `choices` (more specs the chat may switch to), optional `[model.prices]`. An `openai:` spec calls `https://api.openai.com/v1` unless `OPENAI_BASE_URL` points it at an OpenAI-compatible server (OpenRouter: `https://openrouter.ai/api/v1`). An `anthropic:` spec reads `ANTHROPIC_API_KEY` and runs with adaptive thinking and prompt caching. To scope a key to one profile, declare the name in `[env]` and set `<PROFILE_ID>_ANTHROPIC_API_KEY`. |
 | `[code_tool]` | **Rename** the sandbox tool after the data source. A generic `run_code` reads as “any Python here” and snippets drift into the restricted interpreter. `purpose` is optional; wall-clock and heap already have long-horizon defaults. |
 | `[skills]` | `inline` (always in the prompt) vs `deferred` (loaded with `load_capability` when needed) |
 | `[tools]` | omit to load every `tools/*.py`; helpers without `register` are fine |

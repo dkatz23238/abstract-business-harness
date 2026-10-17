@@ -88,6 +88,18 @@ class ModelConfig:
     request_limit: int = 500
     retries: int = 6
     prices: dict[str, dict[str, float]] = field(default_factory=dict)
+    # Specs the chat may switch to; always starts with `spec`.
+    choices: tuple[str, ...] = ()
+
+    @property
+    def options(self) -> list[str]:
+        return list(dict.fromkeys([self.spec, *self.choices]))
+
+    def pick(self, value: object | None) -> str:
+        """A spec from `options`; anything else falls back to `spec`."""
+        if isinstance(value, str) and value.strip() in self.options:
+            return value.strip()
+        return self.spec
 
 
 @dataclass(frozen=True)
@@ -333,6 +345,7 @@ class Profile:
             "name": self.name,
             "description": self.description,
             "model": self.model.spec,
+            "model_choices": self.model.options,
             "default_effort": self.model.effort,
             "effort_levels": list(EFFORT_LEVELS),
             "code_tool": self.code_tool.name,
@@ -515,12 +528,17 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
         problems.append(
             f"model.effort {raw_effort!r} must be one of {', '.join(EFFORT_LEVELS)}"
         )
+    raw_choices = model_raw.get("choices") or []
+    if not isinstance(raw_choices, list):
+        problems.append("model.choices must be a list of model specs")
+        raw_choices = []
     model = ModelConfig(
         spec=str(model_raw.get("spec", ModelConfig.spec)),
         effort=coerce_effort(raw_effort),
         request_limit=int(model_raw.get("request_limit", ModelConfig.request_limit)),
         retries=int(model_raw.get("retries", ModelConfig.retries)),
         prices={k: dict(v) for k, v in (model_raw.get("prices") or {}).items()},
+        choices=tuple(str(c).strip() for c in raw_choices if str(c).strip()),
     )
 
     code_raw = data.get("code_tool", {})

@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Message } from "@ag-ui/client";
 import type { EffortLevel, ToolActivity } from "../api";
-import { EFFORT_LEVELS } from "../api";
+import { EFFORT_LEVELS, shortModelName } from "../api";
 import { groupNestedByParent } from "../nestedActivity";
 import { maybeRedact, redactEnabled, useRedactGeneration } from "../redact";
 import CodeBlock from "./CodeBlock";
@@ -32,6 +32,9 @@ interface Props {
   onNewConversation: () => void;
   effort: EffortLevel;
   onEffortChange: (effort: EffortLevel) => void;
+  model?: string;
+  modelChoices?: string[];
+  onModelChange?: (model: string) => void;
   placeholder?: string;
   hint?: string;
   dataSourceName?: string;
@@ -559,6 +562,9 @@ export default function Chat({
   onNewConversation,
   effort,
   onEffortChange,
+  model,
+  modelChoices = [],
+  onModelChange,
   placeholder = "Ask a question…",
   hint,
   dataSourceName = "the data source",
@@ -666,6 +672,24 @@ export default function Chat({
           rows={3}
         />
         <div className="chat-send">
+          {modelChoices.length > 1 && onModelChange && (
+            <label className="effort-picker">
+              <span className="effort-label">Model</span>
+              <select
+                className="effort-select"
+                value={model && modelChoices.includes(model) ? model : modelChoices[0]}
+                disabled={running}
+                onChange={(e) => onModelChange(e.target.value)}
+                title="Model for this conversation. The first is the profile default."
+              >
+                {modelChoices.map((choice) => (
+                  <option key={choice} value={choice}>
+                    {shortModelName(choice)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <label className="effort-picker">
             <span className="effort-label">Effort</span>
             <select

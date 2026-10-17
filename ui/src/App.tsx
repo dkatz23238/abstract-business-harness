@@ -104,6 +104,9 @@ export default function App() {
   const [messages, setMessages] = useState<readonly Message[]>([]);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>("");
+  const [modelChoices, setModelChoices] = useState<string[]>([]);
+  // Empty means the profile default.
+  const [model, setModel] = useState<string>("");
   const [defaultEffort, setDefaultEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
   const [effort, setEffort] = useState<EffortLevel>(DEFAULT_EFFORT);
   const [running, setRunning] = useState(false);
@@ -200,17 +203,20 @@ export default function App() {
 
   const refreshThreads = useCallback(() => {
     listThreads()
-      .then(({ threads, default_model, default_effort }) => {
+      .then(({ threads, default_model, model_choices, default_effort }) => {
         setThreads(threads);
         setDefaultModel(default_model);
+        setModelChoices(model_choices);
         setDefaultEffort(coerceEffort(default_effort));
       })
       .catch((e) => setRunError(`Could not load past conversations — is the backend running?\n${errText(e)}`));
   }, []);
 
-  // Model shown in the header: the one that answered in this thread, or the
-  // server default for a thread that hasn't run yet.
-  const activeModel = threads.find((t) => t.id === threadId)?.model ?? defaultModel;
+  // Model shown in the header: the one picked for this thread, else the one
+  // that last answered in it, else the server default.
+  const activeModel = model || (threads.find((t) => t.id === threadId)?.model ?? defaultModel);
+  const pickModel = (stored: string | null) =>
+    setModel(stored && modelChoices.includes(stored) ? stored : "");
 
   // Runs are detached: they live on the server, not in this tab's request.
   // When we lost the original POST stream (page reload, dropped connection),
@@ -277,9 +283,10 @@ export default function App() {
   useEffect(() => {
     if (!signedIn) return;
     activateThread(agent.threadId)
-      .then(({ messages, effort: stored }) => {
+      .then(({ messages, effort: stored, model: storedModel }) => {
         setMessages(messages);
         setEffort(coerceEffort(stored));
+        setModel(storedModel ?? "");
         return syncRunState(agent.threadId);
       })
       .catch((e) => setRunError(`Could not restore this conversation:\n${errText(e)}`));
@@ -341,9 +348,10 @@ export default function App() {
     if (id === threadId) return;
     leaveRun();
     try {
-      const { messages, effort: stored } = await activateThread(id);
+      const { messages, effort: stored, model: storedModel } = await activateThread(id);
       setMessages(messages);
       setEffort(coerceEffort(stored, defaultEffort));
+      pickModel(storedModel);
     } catch (e) {
       setRunError(`Could not open that conversation:\n${errText(e)}`);
       syncRunState(threadId).catch(() => {}); // still here: follow its run again
@@ -388,6 +396,7 @@ export default function App() {
     setRunError(null);
     setThreadId(id);
     setEffort(defaultEffort);
+    setModel("");
   };
 
   const send = async (text: string) => {
@@ -399,17 +408,18 @@ export default function App() {
     setRunning(true);
     // Persist the prompt right away so a mid-run refresh still shows it, and
     // list the thread so the user can navigate away and back while it runs.
-    persistConversation({ effort }).then(refreshThreads).catch(() => {});
+    const chosen = model || undefined;
+    persistConversation({ effort, model: chosen }).then(refreshThreads).catch(() => {});
 
     const finishAttached = () => {
       setRunning(false);
       setMessages([...agent.messages]);
-      persistConversation({ effort }).then(refreshThreads).catch(() => {});
+      persistConversation({ effort, model: chosen }).then(refreshThreads).catch(() => {});
     };
 
     try {
       await agent.runAgent(
-        { forwardedProps: { effort } },
+        { forwardedProps: { effort, ...(chosen ? { model: chosen } : {}) } },
         liveSubscriber(
           () => setMessages([...agent.messages]),
           (msg) => setRunError(msg),
@@ -552,6 +562,12 @@ export default function App() {
             onEffortChange={(next) => {
               setEffort(next);
               if (agent.messages.length > 0) persistConversation({ effort: next }).catch(() => {});
+            }}
+            model={activeModel}
+            modelChoices={modelChoices}
+            onModelChange={(next) => {
+              setModel(next);
+              if (agent.messages.length > 0) persistConversation({ model: next }).catch(() => {});
             }}
             placeholder={profile?.placeholder}
             hint={profile?.hint}

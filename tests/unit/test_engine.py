@@ -1,4 +1,4 @@
-from abstract.engine import _reasoning_model, model_settings_for_effort
+from abstract.engine import _reasoning_model, model_settings_for_effort, run_model
 from abstract.profile import coerce_effort
 
 
@@ -31,6 +31,30 @@ def test_openai_base_url_honours_env(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     model, _ = _reasoning_model("openai:gpt-5.6-luna")
     assert model.base_url.rstrip("/") == "https://openrouter.ai/api/v1"
+
+
+def test_anthropic_spec_gets_thinking_and_caching(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    from pydantic_ai.models.anthropic import AnthropicModel
+
+    model, settings = _reasoning_model("anthropic:claude-sonnet-5", effort="high")
+    assert isinstance(model, AnthropicModel)
+    assert model.model_name == "claude-sonnet-5"
+    assert settings["thinking"] == "high"
+    assert settings["anthropic_cache"] is True
+    assert settings["anthropic_cache_instructions"] is True
+    assert settings["anthropic_cache_tool_definitions"] is True
+
+
+def test_run_model_layers_effort_over_model_settings(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    model, settings = run_model("anthropic:claude-sonnet-5", "low")
+    assert model.model_name == "claude-sonnet-5"
+    assert settings["thinking"] == "low"
+    assert settings["anthropic_cache"] is True
+    model, settings = run_model("test", "xhigh")
+    assert model == "test"
+    assert settings == {"openai_reasoning_effort": "xhigh", "thinking": "xhigh"}
 
 
 def test_test_model_passthrough():

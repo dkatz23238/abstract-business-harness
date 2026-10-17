@@ -10,18 +10,27 @@ from fastapi.testclient import TestClient
 
 from abstract.config import EngineSettings
 from abstract.profile import load
-from abstract.server import _effort_from_forwarded, _run_error_from_sse, create_app
+from abstract.server import (
+    _effort_from_forwarded,
+    _model_from_forwarded,
+    _run_error_from_sse,
+    create_app,
+)
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
 
 
-def _client(tmp_path, monkeypatch, *, spec: str = "test"):
+def _client(tmp_path, monkeypatch, *, spec: str = "test", choices: list[str] | None = None):
     monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     dest = tmp_path / "profile"
     shutil.copytree(EXAMPLE, dest)
     text = (dest / "profile.toml").read_text()
-    (dest / "profile.toml").write_text(re.sub(r'spec = ".*"', f'spec = "{spec}"', text, count=1))
+    model_lines = f'spec = "{spec}"'
+    if choices is not None:
+        model_lines += "\nchoices = [" + ", ".join(f'"{c}"' for c in choices) + "]"
+    (dest / "profile.toml").write_text(re.sub(r'spec = ".*"', model_lines, text, count=1))
     settings = EngineSettings(data_root=tmp_path / "data")
     profile = load(dest, settings=settings)
     app = create_app(profile, engine=settings, profile_path=dest)
@@ -163,3 +172,66 @@ def test_agui_run_applies_forwarded_effort(tmp_path, monkeypatch):
         "openai_reasoning_effort": "xhigh",
         "thinking": "xhigh",
     }
+
+
+SONNET = "anthropic:claude-sonnet-5"
+
+
+def test_model_from_forwarded_props_only_accepts_choices(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, choices=[SONNET])
+    profile = client.app.state.harness.profile
+    assert _model_from_forwarded({"model": SONNET}, profile=profile, default=None) == SONNET
+    assert _model_from_forwarded({"model": "openai:other"}, profile=profile, default=None) == "test"
+    assert _model_from_forwarded({}, profile=profile, default=SONNET) == SONNET
+    assert _model_from_forwarded(None, profile=profile, default="openai:gone") == "test"
+
+
+def test_profile_and_threads_expose_model_choices(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, choices=[SONNET, "test"])
+    assert client.get("/profile").json()["model_choices"] == ["test", SONNET]
+    assert client.get("/threads").json()["model_choices"] == ["test", SONNET]
+
+
+def test_thread_model_round_trip(tmp_path, monkeypatch):
+    client = _client(tmp_path, monkeypatch, choices=[SONNET])
+    messages = [{"id": "m1", "role": "user", "content": "hello"}]
+    client.put("/threads/model-chat", json={"messages": messages, "model": SONNET})
+    assert client.get("/threads/model-chat").json()["model"] == SONNET
+    client.put("/threads/model-chat", json={"messages": messages})
+    assert client.get("/threads/model-chat").json()["model"] == SONNET
+    client.put("/threads/model-chat", json={"messages": messages, "model": "openai:nope"})
+    assert client.get("/threads/model-chat").json()["model"] == "test"
+
+
+def test_agui_run_uses_forwarded_model(tmp_path, monkeypatch):
+    from pydantic_ai.models.anthropic import AnthropicModel
+    from pydantic_ai.ui.ag_ui import AGUIAdapter
+
+    seen: dict = {}
+    original = AGUIAdapter.run_stream
+
+    def wrapped(self, *args, **kwargs):
+        seen["model"] = kwargs.get("model")
+        seen["model_settings"] = kwargs.get("model_settings")
+        # Keep the run offline: answer with the test model.
+        kwargs["model"] = "test"
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(AGUIAdapter, "run_stream", wrapped)
+    client = _client(tmp_path, monkeypatch, choices=[SONNET])
+    r = client.post(
+        "/agui",
+        json={
+            "threadId": "model-run",
+            "runId": "model-run-1",
+            "messages": [{"id": "m1", "role": "user", "content": "hello"}],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {"effort": "high", "model": SONNET},
+            "state": {},
+        },
+    )
+    assert r.status_code == 200
+    assert isinstance(seen["model"], AnthropicModel)
+    assert seen["model_settings"]["thinking"] == "high"
+    assert seen["model_settings"]["anthropic_cache"] is True

@@ -49,6 +49,31 @@ def test_profile_can_override_default_effort(tmp_path, monkeypatch):
     assert p.ui_config()["default_effort"] == "high"
 
 
+def test_model_choices_start_with_spec_and_dedupe(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path))
+    dest = tmp_path / "copy"
+    shutil.copytree(EXAMPLE, dest)
+    text = (dest / "profile.toml").read_text()
+    choices = 'choices = ["anthropic:claude-sonnet-5", "openai:gpt-5.6-luna"]\n'
+    (dest / "profile.toml").write_text(text.replace("[model]\n", "[model]\n" + choices))
+    p = load(dest)
+    assert p.model.options == ["openai:gpt-5.6-luna", "anthropic:claude-sonnet-5"]
+    assert p.ui_config()["model_choices"] == p.model.options
+    assert p.model.pick("anthropic:claude-sonnet-5") == "anthropic:claude-sonnet-5"
+    assert p.model.pick("openai:unknown") == "openai:gpt-5.6-luna"
+    assert p.model.pick(None) == "openai:gpt-5.6-luna"
+
+
+def test_model_choices_must_be_a_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path))
+    dest = tmp_path / "copy"
+    shutil.copytree(EXAMPLE, dest)
+    text = (dest / "profile.toml").read_text()
+    (dest / "profile.toml").write_text(text.replace("[model]\n", '[model]\nchoices = "x"\n'))
+    with pytest.raises(ProfileError, match="model.choices"):
+        load(dest)
+
+
 def test_missing_toml_is_a_profile_error(tmp_path):
     with pytest.raises(ProfileError):
         load(tmp_path)

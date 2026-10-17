@@ -49,6 +49,17 @@ OpenAI-compatible server such as OpenRouter
 (`https://openrouter.ai/api/v1`); leave it unset to use OpenAI. For a
 no-key smoke test, set `[model] spec = "test"`.
 
+Claude works the same way: `spec = "anthropic:claude-sonnet-5"` with
+`ANTHROPIC_API_KEY` set. The engine turns on adaptive thinking at the chat's
+effort level and Anthropic prompt caching. List more specs in
+`[model] choices` and the chat shows a model picker:
+
+```toml
+[model]
+spec = "anthropic:claude-sonnet-5"
+choices = ["openai:gpt-5.6-luna"]
+```
+
 A production build of the UI is served by the same process. `npm run build`
 in `ui/` (with `VITE_API_URL` empty) writes `ui/dist`, and `abstract serve`
 then returns that app at `/`. Set `HARNESS_UI_DIR` to point somewhere else.
@@ -62,6 +73,7 @@ stay on the host:
 docker build -t abstract .
 docker run --rm -p 8811:8811 \
   -e OPENAI_API_KEY \
+  -e ANTHROPIC_API_KEY \
   -e HARNESS_ADMIN_TOKEN \
   -v "$HOME/eia-profile:/harness-profile" \
   abstract
@@ -168,7 +180,9 @@ curl -N http://127.0.0.1:8811/agui \
 ```
 
 `$API_KEY` is the value printed at startup. `forwardedProps.effort` may be
-`low`, `medium`, `high`, or `xhigh`.
+`low`, `medium`, `high`, or `xhigh`. `forwardedProps.model` may be any spec
+in the profile's `model_choices` (`GET /profile`); other values run on the
+default. A thread keeps the model it last ran on.
 
 ## Workspace files
 

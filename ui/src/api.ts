@@ -75,6 +75,8 @@ export interface ProfileConfig {
   hint?: string;
   code_tool: string;
   model: string;
+  /** Models the chat picker offers; the first is the profile default. */
+  model_choices?: string[];
   /** Profile default; the chat picker starts here on a new thread. */
   default_effort?: EffortLevel;
   effort_levels?: EffortLevel[];
@@ -151,6 +153,8 @@ export interface ThreadListing {
   threads: ThreadSummary[];
   /** Model a new (not yet run) thread will use. */
   default_model: string;
+  /** Models a thread may switch to; the first is `default_model`. */
+  model_choices: string[];
   /** Effort a new thread starts at. */
   default_effort: EffortLevel;
 }
@@ -162,6 +166,7 @@ export async function listThreads(): Promise<ThreadListing> {
   return {
     threads: data.threads as ThreadSummary[],
     default_model: data.default_model ?? "",
+    model_choices: (data.model_choices as string[] | undefined) ?? [],
     default_effort: coerceEffort(data.default_effort),
   };
 }
@@ -201,12 +206,16 @@ export async function loadThreadMessages<M>(threadId: string): Promise<M[]> {
 export async function saveThreadMessages(
   threadId: string,
   messages: unknown,
-  extra?: { effort?: EffortLevel },
+  extra?: { effort?: EffortLevel; model?: string },
 ): Promise<void> {
   await apiFetch(`${API_URL}/threads/${threadId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages, ...(extra?.effort ? { effort: extra.effort } : {}) }),
+    body: JSON.stringify({
+      messages,
+      ...(extra?.effort ? { effort: extra.effort } : {}),
+      ...(extra?.model ? { model: extra.model } : {}),
+    }),
   });
 }
 

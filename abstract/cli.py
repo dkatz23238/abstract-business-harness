@@ -58,27 +58,31 @@ def cmd_serve(args) -> None:
 def cmd_chat(args) -> None:
     from pydantic_ai.usage import UsageLimits
 
-    from .engine import build, model_settings_for_effort
+    from .engine import build, run_model
 
     profile = _load_profile(args)
+    if args.model and args.model not in profile.model.options:
+        sys.exit(f"--model must be one of: {', '.join(profile.model.options)}")
     _setup_tracing(f"abstract:{profile.id}")
     built = build(profile, trace_tools=args.verbose)
     limits = UsageLimits(request_limit=profile.model.request_limit)
     effort = args.effort or profile.model.effort
-    settings = model_settings_for_effort(effort)
+    spec = profile.model.pick(args.model)
+    model, settings = run_model(spec, effort)
     print(
-        f"[abstract] profile={profile.id} model={profile.model.spec} "
+        f"[abstract] profile={profile.id} model={spec} "
         f"effort={effort} workspace={built.workspace}"
     )
     if args.prompt:
         result = built.agent.run_sync(
-            args.prompt, usage_limits=limits, model_settings=settings
+            args.prompt, usage_limits=limits, model=model, model_settings=settings
         )
         print(result.output)
         return
     built.agent.to_cli_sync(
         prog_name=f"abstract:{profile.id}",
         usage_limits=limits,
+        model=model,
         model_settings=settings,
     )
 
@@ -321,6 +325,11 @@ def main(argv: list[str] | None = None) -> None:
         choices=EFFORT_LEVELS,
         default=None,
         help="reasoning effort (default: profile / medium)",
+    )
+    chat.add_argument(
+        "--model",
+        default=None,
+        help="one of the profile's [model] spec / choices (default: spec)",
     )
     chat.set_defaults(func=cmd_chat)
 
