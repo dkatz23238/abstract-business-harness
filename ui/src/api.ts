@@ -8,7 +8,7 @@ export const API_URL: string = import.meta.env.DEV
   ? ""
   : ((import.meta.env.VITE_API_URL as string | undefined) ?? "");
 
-/** Same value the server prints at startup. Signs in the UI and authorizes API calls. */
+/** The session token from `/auth/login` (or a pasted API key). Authorizes every API call. */
 const API_KEY_STORAGE = "abstract-api-key";
 
 export function getApiKey(): string {
@@ -65,6 +65,66 @@ export function urlWithToken(url: string): string {
   return `${url}${join}token=${encodeURIComponent(key)}`;
 }
 
+/** `?owner=` for reads of another user's thread; nothing for your own. */
+function ownerQuery(owner?: string | null, join = "?"): string {
+  return owner ? `${join}owner=${encodeURIComponent(owner)}` : "";
+}
+
+// ---- account ----
+
+export type UserRole = "user" | "admin";
+export type UserVisibility = "siloed" | "shared";
+
+export interface UserInfo {
+  username: string;
+  role: UserRole;
+  visibility: UserVisibility;
+  created_at: number;
+  /** Admins and `shared` users may read other users' threads. */
+  can_view_others: boolean;
+}
+
+async function detailOf(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null);
+  return typeof body?.detail === "string" ? body.detail : `HTTP ${res.status}`;
+}
+
+/** Trade a username and password for a session token; stores it. */
+export async function login(username: string, password: string): Promise<UserInfo> {
+  const res = await fetch(`${API_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) throw new Error(await detailOf(res));
+  const data = (await res.json()) as { token: string; user: UserInfo };
+  setApiKey(data.token);
+  return data.user;
+}
+
+export async function fetchMe(): Promise<UserInfo> {
+  const res = await apiFetch(`${API_URL}/me`);
+  if (!res.ok) throw new Error(await detailOf(res));
+  return (await res.json()) as UserInfo;
+}
+
+/** Change the password; the server ends every session and returns a fresh token. */
+export async function changePassword(current: string, next: string): Promise<void> {
+  const res = await apiFetch(`${API_URL}/me/password`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: current, new_password: next }),
+  });
+  if (!res.ok) throw new Error(await detailOf(res));
+  setApiKey(((await res.json()) as { token: string }).token);
+}
+
+export async function rotateMyApiKey(): Promise<string> {
+  const res = await apiFetch(`${API_URL}/me/api-key`, { method: "POST" });
+  if (!res.ok) throw new Error(await detailOf(res));
+  return ((await res.json()) as { api_key: string }).api_key;
+}
+
 export interface ProfileConfig {
   id: string;
   name: string;
@@ -107,15 +167,18 @@ export interface WorkspaceFile {
   kind: string;
 }
 
-export async function fetchWorkspaceFiles(threadId: string): Promise<WorkspaceFile[]> {
-  const res = await apiFetch(`${API_URL}/workspace/${threadId}/files`);
+export async function fetchWorkspaceFiles(
+  threadId: string,
+  owner?: string | null,
+): Promise<WorkspaceFile[]> {
+  const res = await apiFetch(`${API_URL}/workspace/${threadId}/files${ownerQuery(owner)}`);
   if (!res.ok) throw new Error(`workspace listing failed: ${res.status}`);
   const data = await res.json();
   return data.files as WorkspaceFile[];
 }
 
-export function rawFileUrl(threadId: string, path: string): string {
-  return urlWithToken(`${API_URL}/workspace/raw/${threadId}/${path}`);
+export function rawFileUrl(threadId: string, path: string, owner?: string | null): string {
+  return urlWithToken(`${API_URL}/workspace/raw/${threadId}/${path}${ownerQuery(owner)}`);
 }
 
 // ---- detached run status ----
@@ -130,8 +193,8 @@ export interface RunStatus {
   error?: string | null;
 }
 
-export async function fetchRunStatus(threadId: string): Promise<RunStatus> {
-  const res = await apiFetch(`${API_URL}/runs/${threadId}`);
+export async function fetchRunStatus(threadId: string, owner?: string | null): Promise<RunStatus> {
+  const res = await apiFetch(`${API_URL}/runs/${threadId}${ownerQuery(owner)}`);
   if (!res.ok) throw new Error(`run status failed: ${res.status}`);
   return (await res.json()) as RunStatus;
 }
@@ -140,6 +203,8 @@ export async function fetchRunStatus(threadId: string): Promise<RunStatus> {
 
 export interface ThreadSummary {
   id: string;
+  /** Username the thread belongs to. */
+  owner: string;
   title: string;
   updated_at: number;
   message_count: number;
@@ -159,8 +224,9 @@ export interface ThreadListing {
   default_effort: EffortLevel;
 }
 
-export async function listThreads(): Promise<ThreadListing> {
-  const res = await apiFetch(`${API_URL}/threads`);
+/** `all` adds other users' threads when the caller may read them. */
+export async function listThreads(scope: "mine" | "all" = "mine"): Promise<ThreadListing> {
+  const res = await apiFetch(`${API_URL}/threads?scope=${scope}`);
   if (!res.ok) throw new Error(`thread listing failed: ${res.status}`);
   const data = await res.json();
   return {
@@ -186,8 +252,11 @@ export interface ThreadDetail<M = unknown> {
   effort?: string | null;
 }
 
-export async function loadThread<M>(threadId: string): Promise<ThreadDetail<M>> {
-  const res = await apiFetch(`${API_URL}/threads/${threadId}`);
+export async function loadThread<M>(
+  threadId: string,
+  owner?: string | null,
+): Promise<ThreadDetail<M>> {
+  const res = await apiFetch(`${API_URL}/threads/${threadId}${ownerQuery(owner)}`);
   if (!res.ok) throw new Error(`thread load failed: ${res.status}`);
   const data = (await res.json()) as ThreadDetail<M>;
   return {
@@ -307,8 +376,9 @@ export function subscribeToolEvents(
   onUpdate: (updater: (prev: Map<string, ToolActivity>) => Map<string, ToolActivity>) => void,
   onSummary?: (summary: ToolFeedSummary) => void,
   onUsage?: (record: UsageRecord) => void,
+  owner?: string | null,
 ): () => void {
-  const source = new EventSource(urlWithToken(`${API_URL}/events/${threadId}`));
+  const source = new EventSource(urlWithToken(`${API_URL}/events/${threadId}${ownerQuery(owner)}`));
   source.onmessage = (msg) => {
     const ev = JSON.parse(msg.data);
     if (ev.phase === "summary") {

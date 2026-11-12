@@ -1,15 +1,4 @@
-import { API_URL } from "./api";
-
-const TOKEN_KEY = "abstract-admin-token";
-
-export function getAdminToken(): string {
-  return sessionStorage.getItem(TOKEN_KEY) ?? "";
-}
-
-export function setAdminToken(token: string): void {
-  if (token) sessionStorage.setItem(TOKEN_KEY, token);
-  else sessionStorage.removeItem(TOKEN_KEY);
-}
+import { API_URL, authHeaders, notifyUnauthorized, type UserInfo, type UserRole, type UserVisibility } from "./api";
 
 export class AdminHttpError extends Error {
   status: number;
@@ -22,10 +11,8 @@ export class AdminHttpError extends Error {
 }
 
 async function adminFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers);
-  const token = getAdminToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const res = await fetch(`${API_URL}${path}`, { ...init, headers });
+  const res = await fetch(`${API_URL}${path}`, { ...init, headers: authHeaders(init.headers) });
+  if (res.status === 401) notifyUnauthorized();
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     let detail = `HTTP ${res.status}`;
@@ -246,10 +233,50 @@ export async function reloadAdminProfile(): Promise<{ ok: boolean; hash: string 
   return (await res.json()) as { ok: boolean; hash: string };
 }
 
-export async function rotateApiKey(): Promise<string> {
-  const res = await adminFetch("/admin/api-key", { method: "POST" });
-  const data = (await res.json()) as { api_key: string };
-  return data.api_key;
+// ---- users ----
+
+export async function listUsers(): Promise<UserInfo[]> {
+  const res = await adminFetch("/admin/users");
+  return ((await res.json()) as { users: UserInfo[] }).users;
+}
+
+export async function createUser(body: {
+  username: string;
+  password: string;
+  role: UserRole;
+  visibility: UserVisibility;
+}): Promise<{ user: UserInfo; api_key: string }> {
+  const res = await adminFetch("/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return (await res.json()) as { user: UserInfo; api_key: string };
+}
+
+export async function updateUser(
+  username: string,
+  body: { role?: UserRole; visibility?: UserVisibility; password?: string },
+): Promise<UserInfo> {
+  const res = await adminFetch(`/admin/users/${encodeURIComponent(username)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return (await res.json()) as UserInfo;
+}
+
+export async function rotateUserApiKey(username: string): Promise<string> {
+  const res = await adminFetch(`/admin/users/${encodeURIComponent(username)}/api-key`, {
+    method: "POST",
+  });
+  return ((await res.json()) as { api_key: string }).api_key;
+}
+
+export async function deleteUser(username: string, purge: boolean): Promise<void> {
+  await adminFetch(`/admin/users/${encodeURIComponent(username)}?purge=${purge}`, {
+    method: "DELETE",
+  });
 }
 
 export async function deleteAdminTool(name: string): Promise<void> {

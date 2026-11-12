@@ -229,10 +229,12 @@ class UsageMeter(AbstractCapability):
         thread_id: str,
         *,
         price_overrides: dict[str, dict[str, float]] | None = None,
+        hub_key: str | None = None,
     ):
         super().__init__()
         self._threads_dir = threads_dir
         self._thread_id = thread_id
+        self._hub_key = hub_key or thread_id
         self._overrides = price_overrides or {}
 
     async def after_model_request(self, ctx, *, request_context, response):
@@ -280,4 +282,4 @@ class UsageMeter(AbstractCapability):
             )
         record["cost_usd"] = cost
         append_record(self._threads_dir, self._thread_id, record)
-        hub.publish(self._thread_id, {"phase": "usage", **record}, persist=False)
+        hub.publish(self._hub_key, {"phase": "usage", **record}, persist=False)

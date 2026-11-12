@@ -8,11 +8,15 @@ import {
   persistConversation,
 } from "./agent";
 import {
+  changePassword,
   deleteThread,
+  fetchMe,
   fetchRunStatus,
   fetchProfile,
   getApiKey,
   listThreads,
+  login,
+  rotateMyApiKey,
   setApiKey,
   setUnauthorizedHandler,
   subscribeApiKey,
@@ -27,12 +31,14 @@ import {
   type ToolActivity,
   type ToolFeedSummary,
   type UsageRecord,
+  type UserInfo,
 } from "./api";
 import Chat from "./components/Chat";
 import Threads from "./components/Threads";
 import Assets from "./components/Assets";
 import Admin from "./components/Admin";
-import Modal, { btnDanger, btnGhost, btnPrimary, SecretInput } from "./components/Modal";
+import Users from "./components/Users";
+import Modal, { btnDanger, btnGhost, btnPrimary, inputClass, SecretInput } from "./components/Modal";
 import { redactEnabled, setRedactTerms } from "./redact";
 import "./App.css";
 
@@ -101,6 +107,8 @@ function usageTitle(u: UsageView): string {
 
 export default function App() {
   const [threadId, setThreadId] = useState<string>(agent.threadId);
+  // Owner of the open thread when it is someone else's (read-only); null for your own.
+  const [viewOwner, setViewOwner] = useState<string | null>(null);
   const [messages, setMessages] = useState<readonly Message[]>([]);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>("");
@@ -115,13 +123,24 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null);
 
   const [profile, setProfile] = useState<ProfileConfig | null>(null);
-  const [view, setView] = useState<"chat" | "admin">("chat");
+  const [view, setView] = useState<"chat" | "users" | "admin">("chat");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [signedIn, setSignedIn] = useState(() => !!getApiKey());
+  const [me, setMe] = useState<UserInfo | null>(null);
   const [apiKeyEpoch, setApiKeyEpoch] = useState(0);
+  const [loginMode, setLoginMode] = useState<"password" | "key">("password");
+  const [usernameInput, setUsernameInput] = useState("");
+  const [passwordInput, setPasswordInput] = useState("");
   const [keyInput, setKeyInput] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [signingIn, setSigningIn] = useState(false);
+
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [nextPassword, setNextPassword] = useState("");
+  const [accountNotice, setAccountNotice] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  const [myNewKey, setMyNewKey] = useState<string | null>(null);
 
   useEffect(() => subscribeApiKey(() => setApiKeyEpoch((n) => n + 1)), []);
 
@@ -129,12 +148,16 @@ export default function App() {
     setUnauthorizedHandler(() => {
       setApiKey("");
       setSignedIn(false);
-      setLoginError("That API key is no longer valid. Sign in with the current one.");
+      setMe(null);
+      setLoginError("Your session ended. Sign in again.");
     });
   }, []);
 
   useEffect(() => {
     if (!signedIn) return;
+    fetchMe()
+      .then(setMe)
+      .catch(() => {});
     fetchProfile()
       .then((p) => {
         setRedactTerms(p.redact_terms ?? []);
@@ -201,8 +224,9 @@ export default function App() {
     return t;
   }, [feedSummary, liveUsage]);
 
+  const canViewOthers = me?.can_view_others ?? false;
   const refreshThreads = useCallback(() => {
-    listThreads()
+    listThreads(canViewOthers ? "all" : "mine")
       .then(({ threads, default_model, model_choices, default_effort }) => {
         setThreads(threads);
         setDefaultModel(default_model);
@@ -210,11 +234,14 @@ export default function App() {
         setDefaultEffort(coerceEffort(default_effort));
       })
       .catch((e) => setRunError(`Could not load past conversations — is the backend running?\n${errText(e)}`));
-  }, []);
+  }, [canViewOthers]);
 
   // Model shown in the header: the one picked for this thread, else the one
   // that last answered in it, else the server default.
-  const activeModel = model || (threads.find((t) => t.id === threadId)?.model ?? defaultModel);
+  const activeModel =
+    model ||
+    (threads.find((t) => t.id === threadId && t.owner === (viewOwner ?? me?.username))?.model ??
+      defaultModel);
   const pickModel = (stored: string | null) =>
     setModel(stored && modelChoices.includes(stored) ? stored : "");
 
@@ -229,7 +256,7 @@ export default function App() {
   // we just must not treat the aborted local stream as "the run finished".
   const abandonedRef = useRef<Set<string>>(new Set());
   const watchRun = useCallback(
-    async (id: string) => {
+    async (id: string, owner: string | null = null) => {
       if (watchingRef.current === id) return;
       watchingRef.current = id;
       abandonedRef.current.delete(id);
@@ -240,12 +267,13 @@ export default function App() {
             () => setMessages([...agent.messages]),
             (msg) => setRunError(msg),
           ),
+          owner,
         );
         if (abandonedRef.current.has(id)) return;
         if (agent.threadId === id) {
           setMessages([...agent.messages]);
           setRunning(false);
-          persistConversation().catch(() => {});
+          if (!owner) persistConversation().catch(() => {});
         }
         refreshThreads();
       } catch {
@@ -253,11 +281,11 @@ export default function App() {
         for (;;) {
           await new Promise((r) => setTimeout(r, 2000));
           if (abandonedRef.current.has(id)) return;
-          status = await fetchRunStatus(id).catch(() => null);
+          status = await fetchRunStatus(id, owner).catch(() => null);
           if (status && !status.active) break;
         }
         if (agent.threadId === id) {
-          setMessages(await activateThread(id).then((t) => t.messages).catch(() => agent.messages));
+          setMessages(await activateThread(id, owner).then((t) => t.messages).catch(() => agent.messages));
           if (status?.error) setRunError(`The run failed on the server:\n${status.error}`);
           setRunning(false);
         }
@@ -271,17 +299,23 @@ export default function App() {
 
   /** If the thread has a live server-side run, reflect it and follow it. */
   const syncRunState = useCallback(
-    async (id: string) => {
-      const status = await fetchRunStatus(id).catch(() => null);
-      if (status?.active) watchRun(id);
+    async (id: string, owner: string | null = null) => {
+      const status = await fetchRunStatus(id, owner).catch(() => null);
+      if (status?.active) watchRun(id, owner);
     },
     [watchRun],
   );
 
   // On mount: restore this tab's conversation from the server + thread list,
   // and pick up a run that survived the reload.
+  const restoredRef = useRef(false);
   useEffect(() => {
-    if (!signedIn) return;
+    if (!signedIn) {
+      restoredRef.current = false;
+      return;
+    }
+    if (restoredRef.current) return;
+    restoredRef.current = true;
     activateThread(agent.threadId)
       .then(({ messages, effort: stored, model: storedModel }) => {
         setMessages(messages);
@@ -290,8 +324,11 @@ export default function App() {
         return syncRunState(agent.threadId);
       })
       .catch((e) => setRunError(`Could not restore this conversation:\n${errText(e)}`));
-    refreshThreads();
-  }, [signedIn, refreshThreads, syncRunState]);
+  }, [signedIn, syncRunState]);
+
+  useEffect(() => {
+    if (signedIn) refreshThreads();
+  }, [signedIn, refreshThreads]);
 
   // Bridge tool-event feed follows the active thread (server replays the
   // stored tail on subscribe, so tool detail survives refreshes too).
@@ -299,29 +336,37 @@ export default function App() {
     if (!signedIn) return;
     setFeedSummary(null);
     setLiveUsage([]);
-    return subscribeToolEvents(threadId, setActivities, setFeedSummary, (r) =>
-      setLiveUsage((prev) => [...prev, r]),
+    return subscribeToolEvents(
+      threadId,
+      setActivities,
+      setFeedSummary,
+      (r) => setLiveUsage((prev) => [...prev, r]),
+      viewOwner,
     );
-  }, [signedIn, threadId, apiKeyEpoch]);
+  }, [signedIn, threadId, viewOwner, apiKeyEpoch]);
 
   const signIn = async (e: FormEvent) => {
     e.preventDefault();
-    const key = keyInput.trim();
-    if (!key) return;
     setSigningIn(true);
     setLoginError(null);
-    setApiKey(key);
     try {
+      if (loginMode === "password") {
+        setMe(await login(usernameInput.trim(), passwordInput));
+      } else {
+        setApiKey(keyInput.trim());
+        setMe(await fetchMe());
+      }
       const p = await fetchProfile();
       setRedactTerms(p.redact_terms ?? []);
       setProfile(p);
       document.title = p.title;
       setDefaultEffort(coerceEffort(p.default_effort));
+      setPasswordInput("");
       setKeyInput("");
       setSignedIn(true);
-    } catch {
+    } catch (err) {
       setApiKey("");
-      setLoginError("That API key was rejected.");
+      setLoginError(loginMode === "password" ? errText(err) : "That API key was rejected.");
     } finally {
       setSigningIn(false);
     }
@@ -330,9 +375,46 @@ export default function App() {
   const signOut = () => {
     setApiKey("");
     setSignedIn(false);
+    setMe(null);
     setProfile(null);
+    setView("chat");
+    setAccountOpen(false);
     setLoginError(null);
+    setPasswordInput("");
     setKeyInput("");
+  };
+
+  const closeAccount = () => {
+    setAccountOpen(false);
+    setCurrentPassword("");
+    setNextPassword("");
+    setAccountNotice(null);
+    setAccountError(null);
+    setMyNewKey(null);
+  };
+
+  const submitPasswordChange = async (e: FormEvent) => {
+    e.preventDefault();
+    setAccountError(null);
+    setAccountNotice(null);
+    try {
+      await changePassword(currentPassword, nextPassword);
+      setCurrentPassword("");
+      setNextPassword("");
+      setAccountNotice("Password changed. Other sessions were signed out.");
+    } catch (err) {
+      setAccountError(errText(err));
+    }
+  };
+
+  const rotateMine = async () => {
+    setAccountError(null);
+    setAccountNotice(null);
+    try {
+      setMyNewKey(await rotateMyApiKey());
+    } catch (err) {
+      setAccountError(errText(err));
+    }
   };
 
   /** Stop following the current thread's run in this tab. The run keeps
@@ -344,29 +426,30 @@ export default function App() {
     setRunning(false);
   };
 
-  const switchThread = async (id: string) => {
-    if (id === threadId) return;
+  const switchThread = async (id: string, owner: string | null = null) => {
+    if (id === threadId && owner === viewOwner) return;
     leaveRun();
     try {
-      const { messages, effort: stored, model: storedModel } = await activateThread(id);
+      const { messages, effort: stored, model: storedModel } = await activateThread(id, owner);
       setMessages(messages);
       setEffort(coerceEffort(stored, defaultEffort));
       pickModel(storedModel);
     } catch (e) {
       setRunError(`Could not open that conversation:\n${errText(e)}`);
-      syncRunState(threadId).catch(() => {}); // still here: follow its run again
+      syncRunState(threadId, viewOwner).catch(() => {}); // still here: follow its run again
       return;
     }
     setActivities(new Map());
     setRunError(null);
     setThreadId(id);
-    syncRunState(id).catch(() => {});
+    setViewOwner(owner);
+    syncRunState(id, owner).catch(() => {});
   };
 
   const removeThread = async (id: string) => {
     // The server refuses anyway while a run is active; avoid the round-trip
     // for the common case (delete button on the currently-running thread).
-    if (running && id === threadId) return;
+    if (running && id === threadId && viewOwner === null) return;
     setPendingDelete(id);
   };
 
@@ -380,7 +463,7 @@ export default function App() {
       setRunError(`Could not delete the conversation:\n${errText(e)}`);
       return;
     }
-    if (id === threadId) {
+    if (id === threadId && viewOwner === null) {
       newThread();
     }
     refreshThreads();
@@ -395,11 +478,13 @@ export default function App() {
     setActivities(new Map());
     setRunError(null);
     setThreadId(id);
+    setViewOwner(null);
     setEffort(defaultEffort);
     setModel("");
   };
 
   const send = async (text: string) => {
+    if (viewOwner) return;
     setRunError(null);
     const id = agent.threadId;
     abandonedRef.current.delete(id);
@@ -445,24 +530,54 @@ export default function App() {
   };
 
   if (!signedIn) {
+    const ready =
+      loginMode === "password" ? !!usernameInput.trim() && !!passwordInput : !!keyInput.trim();
     return (
       <div className="app flex items-center justify-center p-8">
         <form
           className="w-full max-w-[420px] rounded-[10px] border border-line bg-pane p-6 shadow-[0_1px_2px_rgba(24,38,32,0.05),0_2px_8px_rgba(24,38,32,0.04)]"
           onSubmit={signIn}
         >
-          <h1 className="mb-1 text-[19px] font-semibold text-ink">Sign in</h1>
-          <p className="mb-3 text-[15px] leading-relaxed text-muted">
-            Enter the API key printed when the server started. The same key authorizes API
-            requests.
-          </p>
-          <SecretInput value={keyInput} onChange={setKeyInput} placeholder="API key" />
-          <button
-            type="submit"
-            className={`${btnPrimary} mt-3 w-full`}
-            disabled={signingIn || !keyInput.trim()}
-          >
+          <h1 className="mb-3 text-[19px] font-semibold text-ink">Sign in</h1>
+          {loginMode === "password" ? (
+            <div className="flex flex-col gap-2">
+              <input
+                className={inputClass}
+                placeholder="Username"
+                autoComplete="username"
+                value={usernameInput}
+                onChange={(e) => setUsernameInput(e.target.value)}
+                autoFocus
+              />
+              <input
+                className={inputClass}
+                type="password"
+                placeholder="Password"
+                autoComplete="current-password"
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+              />
+            </div>
+          ) : (
+            <>
+              <p className="mb-3 text-[15px] leading-relaxed text-muted">
+                Paste your API key. It is the same key scripts send as a Bearer token.
+              </p>
+              <SecretInput value={keyInput} onChange={setKeyInput} placeholder="API key" />
+            </>
+          )}
+          <button type="submit" className={`${btnPrimary} mt-3 w-full`} disabled={signingIn || !ready}>
             Sign in
+          </button>
+          <button
+            type="button"
+            className="mt-2 w-full border-none bg-transparent text-[14px] text-muted underline"
+            onClick={() => {
+              setLoginMode(loginMode === "password" ? "key" : "password");
+              setLoginError(null);
+            }}
+          >
+            {loginMode === "password" ? "Use an API key instead" : "Use username and password"}
           </button>
           {loginError && <p className="mt-3 mb-0 text-[14px] text-danger">{loginError}</p>}
         </form>
@@ -484,7 +599,9 @@ export default function App() {
         )}
         {view === "chat" && (
           <>
-            <span className="thread">thread {threadId.slice(0, 8)}</span>
+            <span className="thread">
+              {viewOwner ? `${viewOwner} · ` : ""}thread {threadId.slice(0, 8)}
+            </span>
             {activeModel && (
               <span className="model-tag header" title={`Model: ${activeModel}`}>
                 {shortModelName(activeModel)}
@@ -524,11 +641,24 @@ export default function App() {
           >
             Chat
           </button>
-          <button
-            className={`ghost ${view === "admin" ? "active" : ""}`}
-            onClick={() => setView("admin")}
-          >
-            Admin
+          {me?.role === "admin" && (
+            <>
+              <button
+                className={`ghost ${view === "users" ? "active" : ""}`}
+                onClick={() => setView("users")}
+              >
+                Users
+              </button>
+              <button
+                className={`ghost ${view === "admin" ? "active" : ""}`}
+                onClick={() => setView("admin")}
+              >
+                Admin
+              </button>
+            </>
+          )}
+          <button className="ghost" onClick={() => setAccountOpen(true)} title="Account">
+            {me?.username ?? "Account"}
           </button>
           <button className="ghost" onClick={signOut}>
             Sign out
@@ -539,18 +669,24 @@ export default function App() {
         <main className="layout admin-layout">
           <Admin />
         </main>
+      ) : view === "users" ? (
+        <main className="layout admin-layout">
+          <Users me={me?.username ?? ""} />
+        </main>
       ) : (
       <main className="layout">
         <Threads
           threads={threads}
+          me={me?.username ?? ""}
           activeId={threadId}
+          activeOwner={viewOwner}
           onSelect={switchThread}
           onNew={newThread}
           onDelete={removeThread}
         />
         <div className="panes">
           <Chat
-            key={threadId ?? "new"}
+            key={`${viewOwner ?? ""}/${threadId}`}
             messages={messages}
             activities={activities}
             running={running}
@@ -572,8 +708,9 @@ export default function App() {
             placeholder={profile?.placeholder}
             hint={profile?.hint}
             dataSourceName={profile?.data_source_name}
+            readOnlyOwner={viewOwner}
           />
-          <Assets running={running} threadId={threadId} />
+          <Assets running={running} threadId={threadId} owner={viewOwner} />
         </div>
       </main>
       )}
@@ -593,6 +730,65 @@ export default function App() {
         }
       >
         This removes the thread, its tool history, and workspace files.
+      </Modal>
+      <Modal
+        open={accountOpen}
+        title={`Account · ${me?.username ?? ""}`}
+        onClose={closeAccount}
+        footer={
+          <button type="button" className={btnGhost} onClick={closeAccount}>
+            Close
+          </button>
+        }
+      >
+        {me && (
+          <p className="mt-0 text-[14px] text-muted">
+            Role <strong>{me.role}</strong> ·{" "}
+            {me.can_view_others ? "can read other users' conversations" : "sees only your own conversations"}
+          </p>
+        )}
+        <form className="flex flex-col gap-2" onSubmit={submitPasswordChange}>
+          <h3 className="m-0 text-[15px] font-semibold text-ink">Change password</h3>
+          <input
+            className={inputClass}
+            type="password"
+            placeholder="Current password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+          />
+          <input
+            className={inputClass}
+            type="password"
+            placeholder="New password (8+ characters)"
+            autoComplete="new-password"
+            value={nextPassword}
+            onChange={(e) => setNextPassword(e.target.value)}
+          />
+          <button
+            type="submit"
+            className={`${btnPrimary} self-start`}
+            disabled={!currentPassword || nextPassword.length < 8}
+          >
+            Change password
+          </button>
+        </form>
+        <div className="mt-4 flex flex-col gap-2">
+          <h3 className="m-0 text-[15px] font-semibold text-ink">API key</h3>
+          <p className="m-0 text-[14px] text-muted">
+            For scripts: send it as <code>Authorization: Bearer …</code>. A new key replaces the old one.
+          </p>
+          {myNewKey ? (
+            <input className={inputClass} readOnly value={myNewKey} onFocus={(e) => e.target.select()} />
+          ) : (
+            <button type="button" className={`${btnDanger} self-start`} onClick={rotateMine}>
+              Generate new API key
+            </button>
+          )}
+          {myNewKey && <p className="m-0 text-[13px] text-muted">Shown once. Copy it now.</p>}
+        </div>
+        {accountNotice && <p className="mt-3 mb-0 text-[14px] text-ink">{accountNotice}</p>}
+        {accountError && <p className="mt-3 mb-0 text-[14px] text-danger">{accountError}</p>}
       </Modal>
     </div>
   );

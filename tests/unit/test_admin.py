@@ -1,51 +1,25 @@
-"""Admin HTTP: token gate, file GET/PUT, independent of HARNESS_UI_TOKEN."""
+"""Admin HTTP: admin-role gate, file GET/PUT, skill pills."""
 
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
-
-from fastapi.testclient import TestClient
-
-from abstract.config import EngineSettings
-from abstract.profile import load
-from abstract.server import create_app
-
-EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
+from conftest import as_user
 
 
-def _client(tmp_path, monkeypatch, *, admin_token, ui_token=None):
-    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
+def test_admin_needs_a_token_and_the_admin_role(admin_client):
+    client = admin_client()
+    assert client.get("/admin/profile", headers={"Authorization": ""}).status_code == 401
+    assert client.get("/admin/profile", headers={"Authorization": "Bearer nope"}).status_code == 401
+    key = as_user(client, "bob")
+    r = client.get("/admin/profile", headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 403
+    assert r.json()["detail"] == "admin role required"
+    assert client.get("/admin/profile").status_code == 200
+
+
+def test_admin_get_files_and_put_instructions(admin_client, tmp_path):
+    client = admin_client()
     dest = tmp_path / "profile"
-    shutil.copytree(EXAMPLE, dest)
-    settings = EngineSettings(
-        data_root=tmp_path / "data",
-        admin_token=admin_token,
-        ui_token=ui_token,
-    )
-    profile = load(dest, settings=settings)
-    app = create_app(profile, engine=settings, profile_path=dest)
-    return TestClient(app), dest
-
-
-def test_admin_disabled_without_token(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch, admin_token=None)
     r = client.get("/admin/profile")
-    assert r.status_code == 404
-
-
-def test_admin_rejects_wrong_token(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch, admin_token="secret")
-    r = client.get("/admin/profile")
-    assert r.status_code == 401
-    r = client.get("/admin/profile", headers={"Authorization": "Bearer nope"})
-    assert r.status_code == 401
-
-
-def test_admin_get_files_and_put_instructions(tmp_path, monkeypatch):
-    client, dest = _client(tmp_path, monkeypatch, admin_token="secret")
-    auth = {"Authorization": "Bearer secret"}
-    r = client.get("/admin/profile", headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert body["id"] == "example"
@@ -63,17 +37,13 @@ def test_admin_get_files_and_put_instructions(tmp_path, monkeypatch):
     assert body["instructions_preview"].endswith("…") or len(body["instructions_preview"]) <= 240
     assert body["instructions_chars"] > 0
 
-    r = client.get("/admin/profile/instructions.md", headers=auth)
+    r = client.get("/admin/profile/instructions.md")
     assert r.status_code == 200
     original = r.text
     assert original
     assert "{{ core." in original
 
-    r = client.post(
-        "/admin/profile/render-instructions",
-        headers=auth,
-        content=original,
-    )
+    r = client.post("/admin/profile/render-instructions", content=original)
     assert r.status_code == 200, r.text
     rendered = r.text
     assert "{{ core." not in rendered
@@ -81,17 +51,13 @@ def test_admin_get_files_and_put_instructions(tmp_path, monkeypatch):
     assert "YOUR EXECUTION SURFACES" in rendered
 
     r = client.post(
-        "/admin/profile/render-instructions",
-        headers=auth,
-        content="Hello {{ core.not_a_block }}\n",
+        "/admin/profile/render-instructions", content="Hello {{ core.not_a_block }}\n"
     )
     assert r.status_code == 422
     assert r.json()["problems"]
 
     r = client.put(
-        "/admin/profile/instructions.md",
-        headers=auth,
-        content=original + "\n<!-- admin test -->\n",
+        "/admin/profile/instructions.md", content=original + "\n<!-- admin test -->\n"
     )
     assert r.status_code == 200, r.text
     assert "<!-- admin test -->" in (dest / "instructions.md").read_text()
@@ -99,17 +65,9 @@ def test_admin_get_files_and_put_instructions(tmp_path, monkeypatch):
     assert history
 
 
-def test_admin_skips_ui_token(tmp_path, monkeypatch):
-    client, _ = _client(tmp_path, monkeypatch, admin_token="admin", ui_token="ui")
-    r = client.get("/profile")
-    assert r.status_code == 401
-    r = client.get("/admin/profile", headers={"Authorization": "Bearer admin"})
-    assert r.status_code == 200
-
-
-def test_admin_skill_load_pills(tmp_path, monkeypatch):
-    client, dest = _client(tmp_path, monkeypatch, admin_token="secret")
-    auth = {"Authorization": "Bearer secret"}
+def test_admin_skill_load_pills(admin_client, tmp_path):
+    client = admin_client()
+    dest = tmp_path / "profile"
     for name, body in {
         "always-on": "# Always\n",
         "on-demand": "# Demand\n",
@@ -122,7 +80,7 @@ def test_admin_skill_load_pills(tmp_path, monkeypatch):
         (dest / "profile.toml").read_text()
         + '\n[skills]\ninline = ["always-on"]\ndeferred = ["on-demand"]\n'
     )
-    r = client.post("/admin/profile/reload", headers=auth)
+    r = client.post("/admin/profile/reload")
     assert r.status_code == 200, r.text
-    skills = {s["name"]: s["load"] for s in client.get("/admin/profile", headers=auth).json()["skills"]}
+    skills = {s["name"]: s["load"] for s in client.get("/admin/profile").json()["skills"]}
     assert skills == {"always-on": "inline", "on-demand": "deferred", "orphan": "unused"}

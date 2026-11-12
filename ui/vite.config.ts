@@ -27,6 +27,9 @@ const proxy: Record<string, ProxyOptions> = {
   "/workspace": apiProxy,
   "/runs": apiProxy,
   "/events": apiProxy,
+  "/auth": apiProxy,
+  "^/me(/|$)": apiProxy,
+  "/healthz": apiProxy,
 };
 
 export default defineConfig({

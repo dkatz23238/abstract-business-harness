@@ -1,6 +1,6 @@
-"""Admin API: rewrite a profile's files, env, and reload.
+"""Admin API: manage users; rewrite a profile's files, env, and reload.
 
-Trusted-developer surface. Disabled unless HARNESS_ADMIN_TOKEN is set.
+Trusted-developer surface: every route needs a user with the admin role.
 Every mutating write is validated in a temp copy first; on success the
 previous file is copied to profiles/<id>/_history/<utc>_<relpath>.
 Env values are never written into the audit copies.
@@ -13,28 +13,26 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field
 
 from . import plugins, profile as profile_mod
-from .api_docs import ADMIN, EnvValueBody, text_request_body
+from .api_docs import (
+    ADMIN,
+    ApiKeyResponse,
+    CreatedUserResponse,
+    CreateUserBody,
+    EnvValueBody,
+    UpdateUserBody,
+    UserOut,
+    text_request_body,
+)
 from .profile import ProfileError, delete_secret, write_secret
+from .users import UserError
 
 
 _ALLOWED_SKILL = "SKILL.md"
 _PREVIEW_CHARS = 240
-
-
-class ApiKeyResponse(BaseModel):
-    """The API key that replaced the previous one."""
-
-    api_key: str = Field(
-        description=(
-            "New API key. The previous key is rejected immediately. "
-            "Send it as `Authorization: Bearer` or `?token=`."
-        )
-    )
 
 
 def _preview(text: str, n: int = _PREVIEW_CHARS) -> str:
@@ -60,12 +58,12 @@ def _tools_payload(p) -> list[dict]:
     return out
 
 
-def _require_admin(request: Request, token: str | None) -> JSONResponse | None:
-    if not token:
-        return JSONResponse({"detail": "admin API disabled"}, status_code=404)
-    supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    if supplied != token:
+def _require_admin(request: Request) -> JSONResponse | None:
+    user = getattr(request.state, "user", None)
+    if user is None:
         return JSONResponse({"detail": "unauthorized"}, status_code=401)
+    if not user.is_admin:
+        return JSONResponse({"detail": "admin role required"}, status_code=403)
     return None
 
 
@@ -111,7 +109,7 @@ def mount(app: FastAPI, state) -> None:
     @app.get("/admin/profile", tags=[ADMIN], summary="Profile editor snapshot")
     async def admin_get(request: Request):
         """Toml, instruction preview, tools, skills, and env status for the loaded profile."""
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         p = state.profile
         skills = []
@@ -145,25 +143,12 @@ def mount(app: FastAPI, state) -> None:
             "env": p.env_status(),
         }
 
-    @app.post(
-        "/admin/api-key",
-        tags=[ADMIN],
-        summary="Rotate the API key",
-        response_model=ApiKeyResponse,
-    )
-    async def rotate_api_key(request: Request):
-        """Replace the API key used by the chat UI and by API clients.
-
-        The new key is returned once. It is also written to `<data-root>/api_key`.
-        """
-        if err := _require_admin(request, state.engine.admin_token):
-            return err
-        return {"api_key": state.api_key.rotate()}
+    _mount_users(app, state)
 
     @app.post("/admin/profile/reload", tags=[ADMIN], summary="Reload the profile from disk")
     async def admin_reload(request: Request):
         """Re-read the profile directory and drop cached agents. This route has no body."""
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         p = state.reload_from_disk()
         return {"ok": True, "hash": p.hash}
@@ -209,7 +194,7 @@ def mount(app: FastAPI, state) -> None:
     )
     async def render_instructions(request: Request):
         """Render an instructions template against the loaded profile without saving it."""
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         try:
             text = (await request.body()).decode("utf-8")
@@ -299,7 +284,7 @@ def mount(app: FastAPI, state) -> None:
     @app.delete("/admin/profile/tools/{name}", tags=[ADMIN], summary="Delete a tool module")
     async def delete_tool(name: str, request: Request):
         """Delete one tool module and reload. The previous file is copied into `_history/`."""
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         if not name.endswith(".py") or "/" in name:
             return JSONResponse({"detail": "invalid tool name"}, status_code=400)
@@ -335,7 +320,7 @@ def mount(app: FastAPI, state) -> None:
 
         Values themselves are omitted.
         """
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         return {"env": state.profile.env_status()}
 
@@ -345,7 +330,7 @@ def mount(app: FastAPI, state) -> None:
 
         The audit copy records that the variable changed and leaves the value out.
         """
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         value = body.value
         write_secret(state.profile, name, value)
@@ -360,7 +345,7 @@ def mount(app: FastAPI, state) -> None:
     )
     async def env_delete(name: str, request: Request):
         """Remove one variable from the secrets file and reload."""
-        if err := _require_admin(request, state.engine.admin_token):
+        if err := _require_admin(request):
             return err
         delete_secret(state.profile, name)
         _audit(state.profile_path, f"env/{name}", b"(deleted)\n")
@@ -368,8 +353,104 @@ def mount(app: FastAPI, state) -> None:
         return {"ok": True}
 
 
+def _mount_users(app: FastAPI, state) -> None:
+    _not_found = {404: {"description": "No such user."}}
+
+    @app.get("/admin/users", tags=[ADMIN], summary="List users")
+    async def list_users(request: Request):
+        """Every account with its role and visibility."""
+        if err := _require_admin(request):
+            return err
+        return {"users": [u.public() for u in state.users.all()]}
+
+    @app.post(
+        "/admin/users",
+        tags=[ADMIN],
+        summary="Create a user",
+        status_code=201,
+        response_model=CreatedUserResponse,
+        responses={400: {"description": "Invalid or duplicate username, or a short password."}},
+    )
+    def create_user(body: CreateUserBody, request: Request):
+        """Add an account. The response carries the user's API key, shown only here."""
+        if err := _require_admin(request):
+            return err
+        try:
+            user, key = state.users.create(
+                body.username, body.password, role=body.role, visibility=body.visibility
+            )
+        except UserError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return JSONResponse({"user": user.public(), "api_key": key}, status_code=201)
+
+    @app.patch(
+        "/admin/users/{username}",
+        tags=[ADMIN],
+        summary="Change a user",
+        response_model=UserOut,
+        responses={400: {"description": "Invalid value."}, **_not_found},
+    )
+    def update_user(username: str, body: UpdateUserBody, request: Request):
+        """Change role, visibility, or password. A new password ends that user's sessions."""
+        if err := _require_admin(request):
+            return err
+        try:
+            user = state.users.update(
+                username, role=body.role, visibility=body.visibility, password=body.password
+            )
+        except KeyError:
+            return JSONResponse({"detail": "no such user"}, status_code=404)
+        except UserError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return user.public()
+
+    @app.post(
+        "/admin/users/{username}/api-key",
+        tags=[ADMIN],
+        summary="Rotate a user's API key",
+        response_model=ApiKeyResponse,
+        responses=_not_found,
+    )
+    async def rotate_user_api_key(username: str, request: Request):
+        """Replace one user's API key. The new key is returned once."""
+        if err := _require_admin(request):
+            return err
+        try:
+            return {"api_key": state.users.rotate_api_key(username)}
+        except KeyError:
+            return JSONResponse({"detail": "no such user"}, status_code=404)
+
+    @app.delete(
+        "/admin/users/{username}",
+        tags=[ADMIN],
+        summary="Delete a user",
+        responses={400: {"description": "That user cannot be deleted."}, **_not_found},
+    )
+    async def delete_user(
+        username: str,
+        request: Request,
+        purge: bool = Query(
+            False, description="Also delete the user's threads and workspaces from disk."
+        ),
+    ):
+        """Remove an account. Their folder stays on disk (admins can still read it) unless `purge`."""
+        if err := _require_admin(request):
+            return err
+        if username == request.state.user.username:
+            return JSONResponse({"detail": "you cannot delete yourself"}, status_code=400)
+        try:
+            state.users.delete(username)
+        except KeyError:
+            return JSONResponse({"detail": "no such user"}, status_code=404)
+        except UserError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        if purge:
+            shutil.rmtree(state.profile.users_dir / username, ignore_errors=True)
+        return {"ok": True, "purged": purge}
+
+
 def _get_text(request: Request, state, rel: str) -> JSONResponse | PlainTextResponse:
-    if err := _require_admin(request, state.engine.admin_token):
+    if err := _require_admin(request):
         return err
     path = state.profile_path / rel
     if not path.is_file():
@@ -378,7 +459,7 @@ def _get_text(request: Request, state, rel: str) -> JSONResponse | PlainTextResp
 
 
 async def _put_text(request: Request, state, rel: str) -> JSONResponse:
-    if err := _require_admin(request, state.engine.admin_token):
+    if err := _require_admin(request):
         return err
     body = await request.body()
     try:

@@ -10,7 +10,7 @@ of rejected before that adapter runs.
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 PROFILE = "Profile"
+ACCOUNT = "Account"
 RUNS = "Runs"
 EVENTS = "Events"
 THREADS = "Threads"
@@ -27,7 +28,14 @@ ADMIN = "Admin"
 OPENAPI_TAGS: list[dict[str, str]] = [
     {
         "name": PROFILE,
-        "description": "Profile metadata the chat UI loads at startup.",
+        "description": "Profile metadata the chat UI loads at startup, and a health check.",
+    },
+    {
+        "name": ACCOUNT,
+        "description": (
+            "Sign in, see who a token belongs to, change your password, "
+            "and rotate your API key."
+        ),
     },
     {
         "name": RUNS,
@@ -51,8 +59,8 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {
         "name": ADMIN,
         "description": (
-            "Read and rewrite the profile directory. "
-            "Every route requires `Authorization: Bearer <HARNESS_ADMIN_TOKEN>`."
+            "Manage users, and read and rewrite the profile directory. "
+            "Every route needs a token of a user with the admin role."
         ),
     },
 ]
@@ -120,6 +128,70 @@ class SaveThreadBody(BaseModel):
     )
 
 
+class UserOut(BaseModel):
+    """One account. Password and API key are never returned here."""
+
+    username: str
+    role: Literal["user", "admin"]
+    visibility: Literal["siloed", "shared"] = Field(
+        description="`siloed` sees only their own threads; `shared` may also read everyone's."
+    )
+    created_at: float
+    can_view_others: bool = Field(description="True for admins and `shared` users.")
+
+
+class LoginBody(BaseModel):
+    username: str = Field(examples=["admin"])
+    password: str = Field(examples=["correct horse battery staple"])
+
+
+class LoginResponse(BaseModel):
+    token: str = Field(
+        description="Session token. Send it as `Authorization: Bearer` or `?token=`."
+    )
+    user: UserOut
+
+
+class ChangePasswordBody(BaseModel):
+    current_password: str
+    new_password: str = Field(description="At least 8 characters.")
+
+
+class ApiKeyResponse(BaseModel):
+    """An API key that replaced the previous one."""
+
+    api_key: str = Field(
+        description=(
+            "New API key, shown only in this response. The previous key is rejected "
+            "immediately. Send it as `Authorization: Bearer` or `?token=`."
+        )
+    )
+
+
+class CreateUserBody(BaseModel):
+    username: str = Field(
+        description="1-32 characters: lowercase letters, digits, `-` or `_`.", examples=["alice"]
+    )
+    password: str = Field(description="At least 8 characters.")
+    role: Literal["user", "admin"] = "user"
+    visibility: Literal["siloed", "shared"] = "siloed"
+
+
+class CreatedUserResponse(BaseModel):
+    user: UserOut
+    api_key: str = Field(description="The new user's API key, shown only in this response.")
+
+
+class UpdateUserBody(BaseModel):
+    """Fields to change; omitted fields keep their value."""
+
+    role: Literal["user", "admin"] | None = None
+    visibility: Literal["siloed", "shared"] | None = None
+    password: str | None = Field(
+        default=None, description="New password. Ends every session of that user."
+    )
+
+
 class EnvValueBody(BaseModel):
     """New value for one profile environment variable."""
 
@@ -175,7 +247,7 @@ def install(app: FastAPI) -> None:
             separate_input_output_schemas=app.separate_input_output_schemas,
         )
         _add_agui_body(schema)
-        _add_admin_security(schema)
+        _add_security(schema)
         app.openapi_schema = schema
         return schema
 
@@ -217,27 +289,31 @@ def _add_agui_body(schema: dict[str, Any]) -> None:
     }
 
 
-def _add_admin_security(schema: dict[str, Any]) -> None:
+_PUBLIC_OPERATIONS = frozenset({"/auth/login", "/healthz"})
+
+
+def _add_security(schema: dict[str, Any]) -> None:
     schemes = schema.setdefault("components", {}).setdefault("securitySchemes", {})
     schemes["apiKey"] = {
         "type": "http",
         "scheme": "bearer",
         "description": (
-            "API key printed at startup and stored in `<data-root>/api_key`. "
+            "A user's API key, or a session token from `POST /auth/login`. "
             "The same value is accepted as the `token` query parameter."
         ),
     }
     schemes["adminBearer"] = {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "token",
-        "description": "The `HARNESS_ADMIN_TOKEN` value.",
+        "description": "API key or session token of a user with the admin role.",
     }
     for path, item in schema.get("paths", {}).items():
         for operation in item.values():
             if not isinstance(operation, dict) or "operationId" not in operation:
                 continue
-            if path.startswith("/admin"):
+            if path in _PUBLIC_OPERATIONS:
+                operation["security"] = []
+            elif path.startswith("/admin"):
                 operation["security"] = [{"adminBearer": []}]
             else:
                 operation["security"] = [{"apiKey": []}]

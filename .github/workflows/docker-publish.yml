@@ -3,6 +3,7 @@ name: Publish Docker image
 on:
   push:
     branches: [main]
+    tags: ["v*.*.*"]
   workflow_dispatch:
 
 concurrency:
@@ -26,6 +27,15 @@ jobs:
 
       - run: uv run pytest -q
 
+      - name: Release tag matches abstract.__version__
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(uv run python -c "import abstract; print(abstract.__version__)")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match abstract.__version__ $version" >&2
+            exit 1
+          fi
+
   push:
     needs: test
     runs-on: ubuntu-latest
@@ -41,18 +51,25 @@ jobs:
           # Push-only so base-image pulls keep the runner's Docker Hub credentials.
           scope: dkatz23238/abstract-business-harness@push
 
+      # Branch pushes publish main and sha-<commit>. A v1.2.3 tag publishes
+      # 1.2.3, 1.2 and latest, so latest only moves on a release.
       - id: meta
-        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        uses: docker/metadata-action@v6
+        with:
+          images: dkatz23238/abstract-business-harness
+          flavor: latest=false
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - uses: docker/build-push-action@v7
         with:
           context: .
           push: true
-          # main and latest move with the branch. sha-<commit> stays put,
-          # so a deploy can be pinned and rolled back.
-          tags: |
-            dkatz23238/abstract-business-harness:main
-            dkatz23238/abstract-business-harness:latest
-            dkatz23238/abstract-business-harness:sha-${{ steps.meta.outputs.short_sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

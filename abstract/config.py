@@ -9,13 +9,11 @@ Environment:
   HARNESS_DATA_ROOT     where per-profile state and workspaces live
                         (default: <repo>/data). One subdirectory per
                         profile id, so two profiles never share threads.
-  HARNESS_UI_TOKEN      optional seed for the API key. Used only when
-                        <data-root>/api_key does not exist yet. The key
-                        itself (Bearer header or ?token=) is required on
-                        every route except /admin/*, the docs, and the UI.
-  HARNESS_ADMIN_TOKEN   required by the /admin endpoints that rewrite a
-                        profile (independent of the API key).
-                        Unset = admin API disabled entirely.
+  HARNESS_ADMIN_PASSWORD  password of the `admin` user. Required on the first
+                        start (no <data-root>/users.json yet), ignored after.
+  HARNESS_ADMIN_API_KEY optional: the admin's API key on that first start.
+                        Unset = a pre-0.2 <data-root>/api_key is kept, else
+                        a key is generated and printed once.
   HARNESS_UI_ORIGINS    comma-separated CORS origins for the web UI.
   HARNESS_UI_DIR        built web UI (index.html). Default: <repo>/ui/dist
                         when that build exists; unset means API only.
@@ -34,6 +32,13 @@ from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_DIR = PACKAGE_DIR.parent
+
+# The account created on first start. It owns the data from before 0.2 and
+# can be neither deleted nor demoted.
+ADMIN_USERNAME = "admin"
+
+# Replaced in 0.2 by user accounts; the server warns when they are still set.
+LEGACY_ENV_VARS = ("HARNESS_UI_TOKEN", "HARNESS_ADMIN_TOKEN")
 
 
 def load_dotenv(path: Path) -> None:
@@ -74,8 +79,12 @@ class EngineSettings:
             os.environ.get("HARNESS_DATA_ROOT", REPO_DIR / "data")
         ).expanduser()
     )
-    ui_token: str | None = field(default_factory=lambda: os.environ.get("HARNESS_UI_TOKEN"))
-    admin_token: str | None = field(default_factory=lambda: os.environ.get("HARNESS_ADMIN_TOKEN"))
+    admin_password: str | None = field(
+        default_factory=lambda: os.environ.get("HARNESS_ADMIN_PASSWORD")
+    )
+    admin_api_key: str | None = field(
+        default_factory=lambda: os.environ.get("HARNESS_ADMIN_API_KEY")
+    )
     ui_origins: list[str] = field(
         default_factory=lambda: [
             o.strip()

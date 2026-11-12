@@ -10,7 +10,8 @@ Capabilities (pydantic-ai-harness):
                       sqlite under the profile's data dir so a plan survives
                       across sessions.
   * Memory          — durable notes (file-backed), shared by every
-                      conversation of the profile. Methodology only: how to
+                      conversation of one user, or of every user when the
+                      profile sets [memory] scope = "shared". Methodology only: how to
                       analyze, which sources reconcile, caveats. Never data
                       or financials (the guidance text enforces the policy).
   * FileSystem      — the thread's workspace: scratch pad + where the HTML
@@ -65,6 +66,7 @@ from pydantic_monty import MountDir
 
 from . import core_instructions, harness_patches, plugins
 from .analysis_tool import build_python_analysis_toolset
+from .config import ADMIN_USERNAME
 from .history import SessionHistory
 from .profile import DEFAULT_EFFORT, Profile, coerce_effort
 
@@ -168,18 +170,20 @@ class BuiltAgent:
 def build(
     profile: Profile,
     *,
+    user: str = ADMIN_USERNAME,
     instance: str | None = None,
     trace_tools: bool = False,
     reload: bool = False,
 ) -> BuiltAgent:
-    """Assemble the agent for one profile.
+    """Assemble the agent for one profile, acting for `user`.
 
-    `instance` isolates one chat thread (the web UI passes the AG-UI thread
-    id): the workspace becomes workspaces/<instance>/ and the plan store
-    becomes per-instance, so parallel chats can't mix assets or clobber each
-    other's plan. Memory and session history stay global on purpose — memory
-    is cross-session knowledge, and history files are already per run.
-    Without `instance` (the CLI), a shared workspace is used.
+    Everything lands under that user's `users/<user>/` folder. `instance`
+    isolates one chat thread (the web UI passes the AG-UI thread id): the
+    workspace becomes workspaces/<instance>/ and the plan store becomes
+    per-instance, so parallel chats can't mix assets or clobber each other's
+    plan. Session history is per user; memory is per user or shared by the
+    whole profile, as `[memory] scope` says. Without `instance` (the CLI),
+    the user's single CLI workspace is used.
     """
     # Re-deliver skill instructions on repeated load_capability calls instead
     # of erroring out, rename the sandbox tool after this profile, and bound
@@ -190,19 +194,19 @@ def build(
         wall_clock_s=profile.code_tool.wall_clock_s,
     )
 
-    state_dir = profile.state_dir
+    paths = profile.user_paths(user)
     if instance:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in instance)
-        workspace = profile.workspaces_dir / safe
-        plans_db = state_dir / "threads" / safe / "plans.db"
+        workspace = paths.workspaces_dir / safe
+        plans_db = paths.threads_dir / safe / "plans.db"
     else:
-        workspace = profile.data_dir / "workspace"
-        plans_db = state_dir / "plans.db"
+        workspace = paths.root / "workspace"
+        plans_db = paths.state_dir / "plans.db"
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "data").mkdir(exist_ok=True)
     (workspace / "reports").mkdir(exist_ok=True)
     plans_db.parent.mkdir(parents=True, exist_ok=True)
-    (state_dir / "memory").mkdir(parents=True, exist_ok=True)
+    paths.memory_dir.mkdir(parents=True, exist_ok=True)
 
     data_toolset, _ctx = plugins.load(profile, workspace=workspace, reload=reload)
 
@@ -239,9 +243,11 @@ def build(
             # Full conversation persisted as JSON after every model step, so
             # even a crashed session leaves a complete trace. View with:
             #   harness history
-            SessionHistory(state_dir / "history", meta={"profile_hash": profile.hash}),
+            SessionHistory(
+                paths.history_dir, meta={"profile_hash": profile.hash, "user": user}
+            ),
             Planning(store=SqlitePlanStore(str(plans_db))),
-            Memory(store=FileStore(state_dir / "memory"), guidance=profile.memory_guidance),
+            Memory(store=FileStore(paths.memory_dir), guidance=profile.memory_guidance),
             *(
                 [Skills(profile.skills_dir, include=frozenset(profile.skills.deferred))]
                 if profile.skills.deferred

@@ -1,6 +1,6 @@
 [project]
 name = "abstract"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Profile-driven long-horizon analysis agent (engine + AG-UI). Domain logic lives in a separate profile directory."
 requires-python = ">=3.12"
 dependencies = [
@@ -24,6 +24,9 @@ abstract = "abstract.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "abstract/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["abstract"]

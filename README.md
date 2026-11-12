@@ -15,8 +15,8 @@ is the reusable half of that design. How to write a profile like that one
 This is usable for real work, and it is still experimental. Run it on a
 machine you control. A host that can reach customer data, production
 systems, or other material you cannot afford to expose is the wrong place
-for it. The API key is a basic gate, not a reason to put the process
-somewhere sensitive.
+for it. Passwords and API keys are a basic gate, not a reason to put the
+process somewhere sensitive.
 
 A profile tool runs with the same privileges as the engine. Do not add one
 that reads or writes data until you have worked through what it can reach,
@@ -30,17 +30,19 @@ Pull the published image instead of building it:
 docker pull dkatz23238/abstract-business-harness
 ```
 
-`latest` tracks `main`. A `sha-<short commit>` tag stays put; pin a deploy
-to that. How to run the container is in [Docker](#docker) below.
+`latest` is the newest release. Pin a deploy to a version tag such as
+`0.2.0` (or `0.2` to follow patch releases). How to run the container is in
+[Docker](#docker) below.
 
 ```bash
 uv sync
-uv run abstract serve --profile profiles/example --port 8811
+HARNESS_ADMIN_PASSWORD='choose-a-password' uv run abstract serve --profile profiles/example --port 8811
 # other terminal
 cd ui && npm install && VITE_API_URL=http://localhost:8811 npm run dev
 ```
 
-Open the Vite URL (5173, or 5174+ if that port is taken). The UI proxies
+Open the Vite URL (5173, or 5174+ if that port is taken) and sign in as
+`admin` with that password. The UI proxies
 `/agui`, `/profile`, and the other engine routes to `VITE_API_URL`, so a
 second Vite on another localhost port does not need CORS. The example
 profile talks to a public JSON API and uses `openai:gpt-5.6-luna` (needs
@@ -74,14 +76,25 @@ docker build -t abstract .
 docker run --rm -p 8811:8811 \
   -e OPENAI_API_KEY \
   -e ANTHROPIC_API_KEY \
-  -e HARNESS_ADMIN_TOKEN \
+  -e HARNESS_ADMIN_PASSWORD \
   -v "$HOME/eia-profile:/harness-profile" \
   abstract
 ```
 
-Pushes to `main` publish `dkatz23238/abstract-business-harness` as `latest`,
-`main`, and `sha-<short commit>`. Pin a deploy to the `sha-` tag. `latest`
-and `main` move with the branch.
+Image tags on `dkatz23238/abstract-business-harness`:
+
+| Tag | Moves when |
+| --- | --- |
+| `0.2.0` | never; one release |
+| `0.2` | each `0.2.x` release |
+| `latest` | each release |
+| `main` | each push to `main` (unreleased) |
+| `sha-<short commit>` | never; one commit |
+
+A release is a `vX.Y.Z` git tag matching `abstract.__version__`; the
+workflow refuses to publish a tag that doesn't match. Changes are in
+[CHANGELOG.md](CHANGELOG.md). `GET /healthz` (no auth) returns the running
+version.
 
 Open `http://localhost:8811`. The image reads one mount, `/harness-profile`.
 A `profile.toml` there is the profile; otherwise `profile/profile.toml` is.
@@ -89,8 +102,8 @@ State goes to `harness-data/` when that directory exists, otherwise `data/`.
 An env value that is an absolute path to a missing file is reread from the
 same filename in the mount, so host paths stored in `profile.toml` still
 find the databases next to the profile. `LOGFIRE_TOKEN` is optional.
-`HARNESS_UI_TOKEN`, when set, is only the initial API key if
-`<data-root>/api_key` does not exist yet. The mount has to be writable by
+`HARNESS_ADMIN_PASSWORD` is required on the first start (see
+[Users and API keys](#users-and-api-keys)). The mount has to be writable by
 uid 1000.
 
 ## Layout
@@ -102,6 +115,19 @@ docs/                authoring guide
 ui/                  AG-UI frontend; strings come from GET /profile
 data/                gitignored per-profile state
 ```
+
+Under the data root:
+
+```
+users.json, session_secret      accounts (0600); shared by every profile
+<profile>/users/<user>/state/   threads, history, memory, plans.db
+<profile>/users/<user>/workspaces/<thread_id>/
+<profile>/shared/memory/        only with [memory] scope = "shared"
+<profile>/layout_version
+```
+
+`[memory] scope` in `profile.toml` is `"user"` (default: each user has their
+own notebook) or `"shared"` (one notebook for everyone on the profile).
 
 A real customer profile is a **separate private git repo**. Point
 `--profile` at it and `--data-root` at its `data/` so threads stay next to
@@ -136,28 +162,53 @@ abstract chat --profile PATH [-p prompt] [-v]
 abstract profile validate --profile PATH
 abstract profile env-list --profile PATH
 abstract profile env-set NAME VALUE --profile PATH
-abstract history --profile PATH [session]
+abstract history --profile PATH [--user NAME] [session]
 abstract profile new DIR [--from PATH]
+abstract users list|add|reset-password|rotate-key --data-root PATH
 ```
 
-## API key
+`chat` and `history` act as `admin` unless `--user` says otherwise. `users`
+works on `users.json` directly, without a running server; it is how you get
+back in after losing the admin password.
 
-Every API route except `/admin/*`, `/docs`, and the built UI files requires
-the API key: `Authorization: Bearer <key>`, or `?token=<key>` when the
-client cannot set a header (the tool-event stream and report iframes).
+## Users and API keys
 
-The first startup writes `<data-root>/api_key` (mode 0600) and prints the
-value. If `HARNESS_UI_TOKEN` is set and the file is missing, that value is
-what gets stored. After the file exists it is the source of truth: changing
-`HARNESS_UI_TOKEN` does not replace it. Delete the file before restart to
-seed a new one from the env var.
+The first `abstract serve` on a data root creates the `admin` account from
+`HARNESS_ADMIN_PASSWORD` (8+ characters) and prints admin's API key once.
+Without the variable the server refuses to start. After that, `users.json`
+is the source of truth and the variable is ignored; change the password in
+the UI or with `abstract users reset-password admin`. Set
+`HARNESS_ADMIN_API_KEY` on that first start to pick admin's key instead of
+getting a generated one.
 
-The web UI asks for this key on the sign-in screen and keeps it in
-`localStorage`. The same key is what external API clients send.
+Admins add users in the **Users** tab or with `POST /admin/users`. Each user
+has:
 
-`POST /admin/api-key` (admin token) replaces the key immediately. The Admin
-tab has a **Rotate API key** button that does this and shows the new value
-once. Other browsers signed in with the old key are signed out.
+- a **role**: `user`, or `admin` (manage users and the profile, read every
+  thread)
+- a **visibility**: `siloed` (only their own threads) or `shared` (can also
+  open other users' threads, read-only)
+- a password, for the web UI
+- an API key (`bh_…`), for scripts; shown once when created or rotated
+
+Every route except `/auth/login`, `/healthz`, `/docs`, and the built UI
+requires a credential: `Authorization: Bearer <api key or session token>`,
+or `?token=<…>` when the client cannot set a header (the tool-event stream
+and report iframes).
+
+`POST /auth/login` with `{"username": …, "password": …}` returns a session
+token valid for 30 days. Changing a password ends that user's sessions; API
+keys keep working until rotated (`POST /me/api-key`, or an admin's
+`POST /admin/users/{name}/api-key`). Five wrong passwords within five
+minutes, for one username or from one client address, lock that username or
+address out of login for five minutes.
+
+```bash
+TOKEN=$(curl -s http://127.0.0.1:8811/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "…"}' | jq -r .token)
+curl -s http://127.0.0.1:8811/me -H "Authorization: Bearer $TOKEN"
+```
 
 ## Start a thread
 
@@ -179,14 +230,24 @@ curl -N http://127.0.0.1:8811/agui \
   }'
 ```
 
-`$API_KEY` is the value printed at startup. `forwardedProps.effort` may be
+`$API_KEY` is your API key (admin's is printed on the first start). The
+thread belongs to whoever's key made the call. `forwardedProps.effort` may be
 `low`, `medium`, `high`, or `xhigh`. `forwardedProps.model` may be any spec
 in the profile's `model_choices` (`GET /profile`); other values run on the
 default. A thread keeps the model it last ran on.
 
+## Reading other users' threads
+
+Admins and `shared` users add `?owner=<username>` to read someone else's
+thread: `GET /threads/{id}`, `/runs/{id}`, `/events/{id}`,
+`/agui/{id}/attach`, `/workspace/{id}/files`, and `/workspace/raw/…`.
+`GET /threads?scope=all` lists every thread they can read, each with an
+`owner` field. Writes (`POST /agui`, `PUT`/`DELETE /threads/{id}`) only ever
+touch the caller's own threads.
+
 ## Workspace files
 
-Each thread writes files under `workspaces/<thread_id>/`. `GET
+Each thread writes files under its owner's `workspaces/<thread_id>/`. `GET
 /workspace/{thread_id}/files` is in `/docs` and returns the relative paths:
 
 ```bash
@@ -205,8 +266,7 @@ curl -s http://127.0.0.1:8811/workspace/thread-1/files \
 
 `path` is relative to that thread's workspace. Dotfiles are omitted.
 
-Fetch the bytes by appending that `path` to `/workspace/raw/<thread_id>/`.
-That URL is a static file mount, so `/docs` has no operation for it:
+Fetch the bytes by appending that `path` to `/workspace/raw/<thread_id>/`:
 
 ```bash
 curl -L -o summary.html \
@@ -219,16 +279,17 @@ works in place of the Bearer header; the UI uses that for report iframes.
 
 ## Admin
 
-Admin HTTP (Bearer `HARNESS_ADMIN_TOKEN`): rewrite tools/skills/instructions,
-set env values, reload, rotate the API key. Writes are validated before they
-land; previous files go to `_history/` under the profile. **Tools are
-trusted code** — same privileges as the engine process. Do not expose the
-admin token.
+`/admin/*` takes the same credentials as every other route, and the account
+must have the `admin` role (others get 403). It rewrites
+tools/skills/instructions, sets env values, reloads the profile, and
+manages users. Writes are validated before they land; previous files go to
+`_history/` under the profile. **Tools are trusted code**: same privileges
+as the engine process, so only give the admin role to people you would give
+shell access.
 
-The web UI has an **Admin** tab that talks to those endpoints. Unlock with
-the admin token (stored in this tab’s session storage, not in the Vite
-build). Unset `HARNESS_ADMIN_TOKEN` and `/admin` stays 404. `/admin` is
-not gated by the API key — the two credentials are independent.
+The web UI shows **Users** and **Admin** tabs to admins.
+
+Upgrading from 0.1: see [docs/upgrade-0.2.md](docs/upgrade-0.2.md).
 
 ## License
 

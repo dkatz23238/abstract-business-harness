@@ -38,6 +38,8 @@ interface Props {
   placeholder?: string;
   hint?: string;
   dataSourceName?: string;
+  /** Set when viewing another user's thread: no composer, just who owns it. */
+  readOnlyOwner?: string | null;
 }
 
 interface ToolCallRef {
@@ -568,6 +570,7 @@ export default function Chat({
   placeholder = "Ask a question…",
   hint,
   dataSourceName = "the data source",
+  readOnlyOwner = null,
 }: Props) {
   useRedactGeneration();
   const [draft, setDraft] = useState("");
@@ -658,6 +661,14 @@ export default function Chat({
         {running && !liveReasoning && <div className="bubble assistant thinking">Working…</div>}
         {error && <ErrorBanner text={maybeRedact(error)} onDismiss={onDismissError} />}
       </div>
+      {readOnlyOwner ? (
+        <footer className="chat-input read-only">
+          <p className="read-only-note">
+            Read-only: this conversation belongs to <strong>{readOnlyOwner}</strong>.
+          </p>
+          <button onClick={onNewConversation}>New conversation</button>
+        </footer>
+      ) : (
       <footer className="chat-input">
         <textarea
           value={draft}
@@ -711,6 +722,7 @@ export default function Chat({
           </button>
         </div>
       </footer>
+      )}
     </section>
   );
 }

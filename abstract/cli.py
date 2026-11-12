@@ -1,4 +1,4 @@
-"""Command-line entry: serve, chat, validate, env, history, new profile."""
+"""Command-line entry: serve, chat, validate, env, history, new profile, users."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 import time
 from pathlib import Path
 
-from .config import EngineSettings, load_dotenv
+from .config import ADMIN_USERNAME, EngineSettings, load_dotenv
 from .profile import EFFORT_LEVELS, Profile, ProfileError, delete_secret, load, write_secret
 
 
@@ -42,16 +42,24 @@ def _setup_tracing(service_name: str) -> None:
 def cmd_serve(args) -> None:
     import uvicorn
 
-    from .server import create_app, log_api_key
+    from . import __version__
+    from .server import create_app, log_startup
+    from .users import BootstrapError
 
     profile = _load_profile(args)
     _setup_tracing(f"abstract:{profile.id}")
-    app = create_app(profile, engine=_engine(args), profile_path=Path(args.profile).expanduser())
+    try:
+        app = create_app(
+            profile, engine=_engine(args), profile_path=Path(args.profile).expanduser()
+        )
+    except BootstrapError as exc:
+        print(f"[abstract] {exc}", file=sys.stderr)
+        raise SystemExit(1)
     print(
-        f"[abstract] profile={profile.id} model={profile.model.spec} "
+        f"[abstract] v{__version__} profile={profile.id} model={profile.model.spec} "
         f"data={profile.data_dir} port={args.port}"
     )
-    log_api_key(app)
+    log_startup(app)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
@@ -64,7 +72,8 @@ def cmd_chat(args) -> None:
     if args.model and args.model not in profile.model.options:
         sys.exit(f"--model must be one of: {', '.join(profile.model.options)}")
     _setup_tracing(f"abstract:{profile.id}")
-    built = build(profile, trace_tools=args.verbose)
+    _migrate(profile)
+    built = build(profile, user=args.user, trace_tools=args.verbose)
     limits = UsageLimits(request_limit=profile.model.request_limit)
     effort = args.effort or profile.model.effort
     spec = profile.model.pick(args.model)
@@ -265,7 +274,86 @@ def cmd_history(args) -> None:
     from . import history
 
     profile = _load_profile(args)
-    history.main(profile.state_dir / "history", args.name)
+    _migrate(profile)
+    history.main(profile.user_paths(args.user).history_dir, args.name)
+
+
+def _migrate(profile) -> None:
+    from . import layout
+
+    for note in layout.migrate(profile):
+        print(f"[abstract] migrate: {note}", file=sys.stderr)
+
+
+def _user_store(args):
+    from .users import UserStore
+
+    store = UserStore(_engine(args).data_root)
+    if not store.exists:
+        print(
+            f"no {store.path} yet: start the server once with HARNESS_ADMIN_PASSWORD set",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    store.load()
+    return store
+
+
+def _read_password(args) -> str:
+    import getpass
+
+    if args.password_stdin:
+        return sys.stdin.readline().rstrip("\n")
+    first = getpass.getpass("password: ")
+    if getpass.getpass("again: ") != first:
+        print("passwords differ", file=sys.stderr)
+        raise SystemExit(1)
+    return first
+
+
+def cmd_users_list(args) -> None:
+    for user in _user_store(args).all():
+        print(f"{user.username:24} {user.role:6} {user.visibility}")
+
+
+def cmd_users_add(args) -> None:
+    from .users import UserError
+
+    store = _user_store(args)
+    try:
+        user, key = store.create(
+            args.username, _read_password(args), role=args.role, visibility=args.visibility
+        )
+    except UserError as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"created {user.username} ({user.role}, {user.visibility})")
+    print(f"api key (shown once): {key}")
+
+
+def cmd_users_reset_password(args) -> None:
+    from .users import UserError
+
+    store = _user_store(args)
+    try:
+        store.update(args.username, password=_read_password(args))
+    except KeyError:
+        print(f"no user {args.username!r}", file=sys.stderr)
+        raise SystemExit(1)
+    except UserError as exc:
+        print(exc, file=sys.stderr)
+        raise SystemExit(1)
+    print(f"password changed for {args.username}; their sessions have ended")
+
+
+def cmd_users_rotate_key(args) -> None:
+    store = _user_store(args)
+    try:
+        key = store.rotate_api_key(args.username)
+    except KeyError:
+        print(f"no user {args.username!r}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"api key (shown once): {key}")
 
 
 def cmd_new(args) -> None:
@@ -331,6 +419,7 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="one of the profile's [model] spec / choices (default: spec)",
     )
+    chat.add_argument("--user", default=ADMIN_USERNAME, help="whose folder to use (default: admin)")
     chat.set_defaults(func=cmd_chat)
 
     val = sub.add_parser("profile", help="profile utilities")
@@ -355,10 +444,32 @@ def main(argv: list[str] | None = None) -> None:
 
     hist = sub.add_parser("history", help="list or render session traces", parents=[shared])
     hist.add_argument("name", nargs="?")
+    hist.add_argument("--user", default=ADMIN_USERNAME, help="whose history (default: admin)")
     hist.set_defaults(func=cmd_history)
 
+    # Accounts live in the data root, not the profile, so no --profile here.
+    users_shared = argparse.ArgumentParser(add_help=False)
+    users_shared.add_argument("--data-root", default=None, help="override HARNESS_DATA_ROOT")
+    users = sub.add_parser("users", help="manage accounts offline (lockout recovery)")
+    usub = users.add_subparsers(dest="users_cmd", required=True)
+    ul = usub.add_parser("list", parents=[users_shared])
+    ul.set_defaults(func=cmd_users_list)
+    ua = usub.add_parser("add", parents=[users_shared])
+    ua.add_argument("username")
+    ua.add_argument("--role", choices=("user", "admin"), default="user")
+    ua.add_argument("--visibility", choices=("siloed", "shared"), default="siloed")
+    ua.add_argument("--password-stdin", action="store_true", help="read the password from stdin")
+    ua.set_defaults(func=cmd_users_add)
+    ur = usub.add_parser("reset-password", parents=[users_shared])
+    ur.add_argument("username")
+    ur.add_argument("--password-stdin", action="store_true", help="read the password from stdin")
+    ur.set_defaults(func=cmd_users_reset_password)
+    uk = usub.add_parser("rotate-key", parents=[users_shared])
+    uk.add_argument("username")
+    uk.set_defaults(func=cmd_users_rotate_key)
+
     args = parser.parse_args(argv)
-    if args.cmd == "profile" and args.profile_cmd == "new":
+    if args.cmd == "users" or (args.cmd == "profile" and args.profile_cmd == "new"):
         args.func(args)
         return
     if not getattr(args, "profile", None):

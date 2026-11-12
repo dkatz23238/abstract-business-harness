@@ -5,6 +5,8 @@ import { redactEnabled, redactHtml, useRedactGeneration } from "../redact";
 interface Props {
   running: boolean;
   threadId: string;
+  /** Owner of the thread when it is someone else's. */
+  owner?: string | null;
 }
 
 function prettySize(bytes: number): string {
@@ -20,16 +22,18 @@ function groupOf(path: string): string {
 
 function HtmlPreview({
   threadId,
+  owner,
   path,
   onClose,
 }: {
   threadId: string;
+  owner?: string | null;
   path: string;
   onClose: () => void;
 }) {
   const redact = redactEnabled();
   const redactGen = useRedactGeneration();
-  const raw = rawFileUrl(threadId, path);
+  const raw = rawFileUrl(threadId, path, owner);
   const [html, setHtml] = useState<string | null>(null);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
@@ -84,19 +88,19 @@ function HtmlPreview({
   );
 }
 
-export default function Assets({ running, threadId }: Props) {
+export default function Assets({ running, threadId, owner = null }: Props) {
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setFiles(await fetchWorkspaceFiles(threadId));
+      setFiles(await fetchWorkspaceFiles(threadId, owner));
       setError(null);
     } catch (e) {
       setError(String(e));
     }
-  }, [threadId]);
+  }, [threadId, owner]);
 
   useEffect(() => {
     refresh();
@@ -137,7 +141,7 @@ export default function Assets({ running, threadId }: Props) {
                     ) : (
                       <a
                         className="asset-name"
-                        href={rawFileUrl(threadId, f.path)}
+                        href={rawFileUrl(threadId, f.path, owner)}
                         target="_blank"
                         rel="noreferrer"
                         title={f.path}
@@ -162,7 +166,9 @@ export default function Assets({ running, threadId }: Props) {
           <p className="hint">Files the agent saves (raw data, HTML reports) appear here.</p>
         )}
       </div>
-      {preview && <HtmlPreview threadId={threadId} path={preview} onClose={() => setPreview(null)} />}
+      {preview && (
+        <HtmlPreview threadId={threadId} owner={owner} path={preview} onClose={() => setPreview(null)} />
+      )}
     </section>
   );
 }

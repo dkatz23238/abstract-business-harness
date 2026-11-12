@@ -2,27 +2,13 @@
 
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
-
+import pytest
 from fastapi.testclient import TestClient
 
-from abstract.config import EngineSettings
-from abstract.profile import load
-from abstract.server import create_app
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
-
-
-def _schema(tmp_path, monkeypatch) -> dict:
-    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    dest = tmp_path / "profile"
-    shutil.copytree(EXAMPLE, dest)
-    settings = EngineSettings(data_root=tmp_path / "data")
-    profile = load(dest, settings=settings)
-    client = TestClient(create_app(profile, engine=settings, profile_path=dest))
-    response = client.get("/openapi.json")
+@pytest.fixture
+def schema(make_app) -> dict:
+    response = TestClient(make_app()).get("/openapi.json")
     assert response.status_code == 200
     return response.json()
 
@@ -35,13 +21,12 @@ def _resolve(schema: dict, node: dict) -> dict:
     return schema["components"]["schemas"][name]
 
 
-def test_docs_are_grouped_and_name_the_server(tmp_path, monkeypatch):
-    schema = _schema(tmp_path, monkeypatch)
+def test_docs_are_grouped_and_name_the_server(schema):
     assert schema["info"]["title"] == "Example Agent AG-UI server"
     assert schema["servers"] == [{"url": "/", "description": "Example Agent"}]
     tag_names = [tag["name"] for tag in schema["tags"]]
     assert "default" not in tag_names
-    assert tag_names == ["Profile", "Runs", "Events", "Threads", "Workspace", "Admin"]
+    assert tag_names == ["Profile", "Account", "Runs", "Events", "Threads", "Workspace", "Admin"]
     for path, methods in schema["paths"].items():
         for method, operation in methods.items():
             assert operation.get("tags"), f"{method.upper()} {path} has no tag"
@@ -49,8 +34,7 @@ def test_docs_are_grouped_and_name_the_server(tmp_path, monkeypatch):
             assert operation["summary"]
 
 
-def test_post_and_put_payloads_are_documented(tmp_path, monkeypatch):
-    schema = _schema(tmp_path, monkeypatch)
+def test_post_and_put_payloads_are_documented(schema):
     agui = schema["paths"]["/agui"]["post"]
     body = agui["requestBody"]["content"]["application/json"]
     assert body["schema"] == {"$ref": "#/components/schemas/RunAgentInput"}
@@ -93,10 +77,21 @@ def test_post_and_put_payloads_are_documented(tmp_path, monkeypatch):
     assert "value" in env_schema["properties"]
     assert schema["paths"]["/admin/profile/reload"]["post"]["security"] == [{"adminBearer": []}]
     assert schema["paths"]["/profile"]["get"]["security"] == [{"apiKey": []}]
-    rotated = schema["paths"]["/admin/api-key"]["post"]
-    assert rotated["summary"] == "Rotate the API key"
+    assert "/admin/api-key" not in schema["paths"]
+    rotated = schema["paths"]["/admin/users/{username}/api-key"]["post"]
     assert rotated["security"] == [{"adminBearer": []}]
     assert "requestBody" not in rotated
     rotated_body = rotated["responses"]["200"]["content"]["application/json"]["schema"]
-    rotated_schema = _resolve(schema, rotated_body)
-    assert "api_key" in rotated_schema["properties"]
+    assert "api_key" in _resolve(schema, rotated_body)["properties"]
+
+    assert schema["paths"]["/auth/login"]["post"]["security"] == []
+    assert schema["paths"]["/healthz"]["get"]["security"] == []
+    assert schema["paths"]["/me/api-key"]["post"]["security"] == [{"apiKey": []}]
+    created = schema["paths"]["/admin/users"]["post"]
+    created_body = created["requestBody"]["content"]["application/json"]["schema"]
+    assert {"username", "password", "role", "visibility"} <= set(
+        _resolve(schema, created_body)["properties"]
+    )
+    owner = [p for p in schema["paths"]["/threads/{thread_id}"]["get"]["parameters"]
+             if p["name"] == "owner"]
+    assert owner and owner[0]["in"] == "query"

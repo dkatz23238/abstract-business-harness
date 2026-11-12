@@ -52,8 +52,12 @@ export const agent = new HttpAgent({
 /** Re-attach to the thread's server-side run: replay buffered AG-UI events
  *  and follow live until the run ends. Throws if the stream can't be
  *  consumed (caller falls back to status polling). */
-export async function attachToRun(subscriber?: AgentSubscriber): Promise<void> {
-  attachTarget = `${API_URL}/agui/${agent.threadId}/attach`;
+export async function attachToRun(
+  subscriber?: AgentSubscriber,
+  owner?: string | null,
+): Promise<void> {
+  const query = owner ? `?owner=${encodeURIComponent(owner)}` : "";
+  attachTarget = `${API_URL}/agui/${agent.threadId}/attach${query}`;
   try {
     await agent.runAgent(undefined, subscriber);
   } finally {
@@ -61,14 +65,17 @@ export async function attachToRun(subscriber?: AgentSubscriber): Promise<void> {
   }
 }
 
-/** Point the agent at another thread and load its stored conversation. */
+/** Point the agent at another thread and load its stored conversation.
+ *  `owner` set means someone else's thread, opened read-only: it is not
+ *  remembered as this tab's thread. */
 export async function activateThread(
   threadId: string,
+  owner?: string | null,
 ): Promise<{ messages: Message[]; effort: string | null; model: string | null }> {
-  const thread = await loadThread<Message>(threadId);
+  const thread = await loadThread<Message>(threadId, owner);
   agent.threadId = threadId;
   agent.setMessages(thread.messages);
-  sessionStorage.setItem(THREAD_KEY, threadId);
+  if (!owner) sessionStorage.setItem(THREAD_KEY, threadId);
   return { messages: thread.messages, effort: thread.effort ?? null, model: thread.model ?? null };
 }
 

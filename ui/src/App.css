@@ -251,6 +251,21 @@ a {
   width: 100%;
 }
 
+.thread-section {
+  margin: 10px 4px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.thread-owner {
+  color: var(--accent-strong);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
 .thread-meta {
   display: flex;
   align-items: center;
@@ -542,6 +557,17 @@ button.ghost:hover {
   border-top: 1px solid var(--border);
   background: var(--pane);
   align-items: stretch;
+}
+
+.chat-input.read-only {
+  align-items: center;
+  justify-content: space-between;
+  background: var(--accent-soft-2);
+}
+
+.read-only-note {
+  margin: 0;
+  color: var(--muted);
 }
 
 .chat-send {

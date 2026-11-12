@@ -28,6 +28,25 @@ def test_example_profile_loads(tmp_path, monkeypatch):
     assert ui["redact_terms"] == ["Acme Grain", "North Elevator"]
 
 
+def test_memory_scope_picks_the_memory_folder(tmp_path, monkeypatch):
+    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
+    dest = tmp_path / "copy"
+    shutil.copytree(EXAMPLE, dest)
+    p = load(dest)
+    assert p.memory_scope == "user"
+    alice = p.user_paths("alice")
+    assert alice.memory_dir == p.data_dir / "users" / "alice" / "state" / "memory"
+    assert alice.threads_dir == p.data_dir / "users" / "alice" / "state" / "threads"
+    assert alice.workspaces_dir == p.data_dir / "users" / "alice" / "workspaces"
+
+    toml = dest / "profile.toml"
+    toml.write_text(toml.read_text() + '\n[memory]\nscope = "shared"\n')
+    assert load(dest).user_paths("alice").memory_dir == p.data_dir / "shared" / "memory"
+    toml.write_text(toml.read_text().replace('"shared"', '"everyone"'))
+    with pytest.raises(ProfileError, match="memory.scope"):
+        load(dest)
+
+
 def test_invalid_effort_is_a_profile_error(tmp_path, monkeypatch):
     monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path))
     dest = tmp_path / "copy"

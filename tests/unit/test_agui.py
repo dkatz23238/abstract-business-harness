@@ -2,45 +2,26 @@
 
 from __future__ import annotations
 
-import re
-import shutil
-from pathlib import Path
-
+import pytest
 from fastapi.testclient import TestClient
 
-from abstract.config import EngineSettings
-from abstract.profile import load
 from abstract.server import (
     _effort_from_forwarded,
     _model_from_forwarded,
     _run_error_from_sse,
-    create_app,
 )
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "profiles" / "example"
+
+@pytest.fixture
+def client_for(admin_client):
+    def _client(tmp_path, monkeypatch, *, spec: str = "test", choices: list[str] | None = None):
+        return admin_client(spec=spec, choices=choices)
+
+    return _client
 
 
-def _client(tmp_path, monkeypatch, *, spec: str = "test", choices: list[str] | None = None):
-    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
-    dest = tmp_path / "profile"
-    shutil.copytree(EXAMPLE, dest)
-    text = (dest / "profile.toml").read_text()
-    model_lines = f'spec = "{spec}"'
-    if choices is not None:
-        model_lines += "\nchoices = [" + ", ".join(f'"{c}"' for c in choices) + "]"
-    (dest / "profile.toml").write_text(re.sub(r'spec = ".*"', model_lines, text, count=1))
-    settings = EngineSettings(data_root=tmp_path / "data")
-    profile = load(dest, settings=settings)
-    app = create_app(profile, engine=settings, profile_path=dest)
-    client = TestClient(app)
-    client.headers["Authorization"] = f"Bearer {app.state.harness.api_key.value}"
-    return client
-
-
-def test_incomplete_agui_body_is_422_not_500(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
+def test_incomplete_agui_body_is_422_not_500(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch)
     r = client.post(
         "/agui",
         json={
@@ -56,8 +37,8 @@ def test_incomplete_agui_body_is_422_not_500(tmp_path, monkeypatch):
     assert "forwardedProps" in loc or "forwarded_props" in loc
 
 
-def test_hello_with_test_model_streams_events(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
+def test_hello_with_test_model_streams_events(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch)
     r = client.post(
         "/agui",
         json={
@@ -93,15 +74,15 @@ def test_effort_from_forwarded_props():
     assert _effort_from_forwarded(None, default="medium") == "medium"
 
 
-def test_profile_exposes_default_effort(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
+def test_profile_exposes_default_effort(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch)
     data = client.get("/profile").json()
     assert data["default_effort"] == "medium"
     assert data["effort_levels"] == ["low", "medium", "high", "xhigh"]
 
 
-def test_thread_effort_round_trip(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch)
+def test_thread_effort_round_trip(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch)
     messages = [{"id": "m1", "role": "user", "content": "hello"}]
     r = client.put("/threads/effort-chat", json={"messages": messages, "effort": "high"})
     assert r.status_code == 200
@@ -117,33 +98,27 @@ def test_thread_effort_round_trip(tmp_path, monkeypatch):
     assert match["effort"] == "high"
 
 
-def test_built_ui_is_served_and_api_still_wins(tmp_path, monkeypatch):
+def test_built_ui_is_served_and_api_still_wins(tmp_path, make_app):
     ui = tmp_path / "ui"
     (ui / "assets").mkdir(parents=True)
     (ui / "index.html").write_text("<!doctype html><title>served-ui</title>")
     (ui / "assets" / "app.js").write_text("console.log(1)")
     (ui / "favicon.svg").write_text("<svg></svg>")
 
-    monkeypatch.setenv("HARNESS_DATA_ROOT", str(tmp_path / "data"))
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    dest = tmp_path / "profile"
-    shutil.copytree(EXAMPLE, dest)
-    settings = EngineSettings(data_root=tmp_path / "data", ui_token="secret", ui_dir=ui)
-    profile = load(dest, settings=settings)
-    client = TestClient(create_app(profile, engine=settings, profile_path=dest))
+    client = TestClient(make_app(admin_api_key="secret", ui_dir=ui))
 
     page = client.get("/")
     assert page.status_code == 200
     assert "served-ui" in page.text
     assert client.get("/assets/app.js").status_code == 200
     assert client.get("/favicon.svg").status_code == 200
-    # The shell is public; the API stays behind the UI token.
+    # The shell is public; the API stays behind a user's token.
     assert client.get("/profile").status_code == 401
     assert client.get("/profile", headers={"Authorization": "Bearer secret"}).status_code == 200
     assert client.get("/missing").status_code == 401
 
 
-def test_agui_run_applies_forwarded_effort(tmp_path, monkeypatch):
+def test_agui_run_applies_forwarded_effort(tmp_path, monkeypatch, client_for):
     from pydantic_ai.ui.ag_ui import AGUIAdapter
 
     seen: dict = {}
@@ -154,7 +129,7 @@ def test_agui_run_applies_forwarded_effort(tmp_path, monkeypatch):
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(AGUIAdapter, "run_stream", wrapped)
-    client = _client(tmp_path, monkeypatch)
+    client = client_for(tmp_path, monkeypatch)
     r = client.post(
         "/agui",
         json={
@@ -177,8 +152,8 @@ def test_agui_run_applies_forwarded_effort(tmp_path, monkeypatch):
 SONNET = "anthropic:claude-sonnet-5"
 
 
-def test_model_from_forwarded_props_only_accepts_choices(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch, choices=[SONNET])
+def test_model_from_forwarded_props_only_accepts_choices(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch, choices=[SONNET])
     profile = client.app.state.harness.profile
     assert _model_from_forwarded({"model": SONNET}, profile=profile, default=None) == SONNET
     assert _model_from_forwarded({"model": "openai:other"}, profile=profile, default=None) == "test"
@@ -186,14 +161,14 @@ def test_model_from_forwarded_props_only_accepts_choices(tmp_path, monkeypatch):
     assert _model_from_forwarded(None, profile=profile, default="openai:gone") == "test"
 
 
-def test_profile_and_threads_expose_model_choices(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch, choices=[SONNET, "test"])
+def test_profile_and_threads_expose_model_choices(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch, choices=[SONNET, "test"])
     assert client.get("/profile").json()["model_choices"] == ["test", SONNET]
     assert client.get("/threads").json()["model_choices"] == ["test", SONNET]
 
 
-def test_thread_model_round_trip(tmp_path, monkeypatch):
-    client = _client(tmp_path, monkeypatch, choices=[SONNET])
+def test_thread_model_round_trip(tmp_path, monkeypatch, client_for):
+    client = client_for(tmp_path, monkeypatch, choices=[SONNET])
     messages = [{"id": "m1", "role": "user", "content": "hello"}]
     client.put("/threads/model-chat", json={"messages": messages, "model": SONNET})
     assert client.get("/threads/model-chat").json()["model"] == SONNET
@@ -203,7 +178,7 @@ def test_thread_model_round_trip(tmp_path, monkeypatch):
     assert client.get("/threads/model-chat").json()["model"] == "test"
 
 
-def test_agui_run_uses_forwarded_model(tmp_path, monkeypatch):
+def test_agui_run_uses_forwarded_model(tmp_path, monkeypatch, client_for):
     from pydantic_ai.models.anthropic import AnthropicModel
     from pydantic_ai.ui.ag_ui import AGUIAdapter
 
@@ -218,7 +193,7 @@ def test_agui_run_uses_forwarded_model(tmp_path, monkeypatch):
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(AGUIAdapter, "run_stream", wrapped)
-    client = _client(tmp_path, monkeypatch, choices=[SONNET])
+    client = client_for(tmp_path, monkeypatch, choices=[SONNET])
     r = client.post(
         "/agui",
         json={

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -70,17 +71,17 @@ def _preview(value: Any, limit: int) -> str:
 class ToolEventHub:
     """Per-thread fan-out of tool events to any number of SSE subscribers.
 
-    When `log_dir` is set (the server points it at the thread-state
-    directory), every event is also appended to
-    <log_dir>/<thread_id>/tool_events.jsonl, and `replay()` returns the
-    stored tail — so a reloaded page gets its tool timeline back instead
-    of starting blank.
+    Threads are addressed by a key the server chooses (owner and thread id).
+    When `log_path` is set (the server maps a key to that thread's
+    `tool_events.jsonl`), every event is also appended there, and `replay()`
+    returns the stored tail — so a reloaded page gets its tool timeline back
+    instead of starting blank.
     """
 
     def __init__(self) -> None:
         self._subscribers: dict[str, set[asyncio.Queue[dict]]] = {}
         self._lock = asyncio.Lock()
-        self.log_dir: Path | None = None
+        self.log_path: Callable[[str], Path] | None = None
         # Names of the profile's data tools (the server sets this); used by
         # summary() to classify events logged before `kind` existed, and by
         # legacy logs copied over from an older deployment.
@@ -90,9 +91,9 @@ class ToolEventHub:
         self.code_tool_names: frozenset[str] = frozenset({"run_code"})
 
     def _log_path(self, thread_id: str) -> Path | None:
-        if self.log_dir is None:
+        if self.log_path is None:
             return None
-        return self.log_dir / safe_id(thread_id) / "tool_events.jsonl"
+        return self.log_path(thread_id)
 
     def _read_log(self, thread_id: str) -> list[dict]:
         path = self._log_path(thread_id)

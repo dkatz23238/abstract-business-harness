@@ -197,6 +197,33 @@ def parse_redact_terms(value: object) -> list[str]:
     return list(seen.values())
 
 
+MEMORY_SCOPES = ("user", "shared")
+
+
+@dataclass(frozen=True)
+class UserPaths:
+    """One user's slice of a profile's data dir: `users/<name>/`."""
+
+    root: Path
+    memory_dir: Path
+
+    @property
+    def state_dir(self) -> Path:
+        return self.root / "state"
+
+    @property
+    def threads_dir(self) -> Path:
+        return self.state_dir / "threads"
+
+    @property
+    def history_dir(self) -> Path:
+        return self.state_dir / "history"
+
+    @property
+    def workspaces_dir(self) -> Path:
+        return self.root / "workspaces"
+
+
 @dataclass
 class Profile:
     id: str
@@ -218,6 +245,7 @@ class Profile:
     hash: str
     raw_toml: str
     redact_terms: list[str] = field(default_factory=list)
+    memory_scope: str = "user"
 
     # ---------------- derived paths ----------------
 
@@ -230,16 +258,22 @@ class Profile:
         return self.path / "tools"
 
     @property
-    def state_dir(self) -> Path:
-        return self.data_dir / "state"
+    def users_dir(self) -> Path:
+        return self.data_dir / "users"
 
     @property
-    def workspaces_dir(self) -> Path:
-        return self.data_dir / "workspaces"
+    def shared_memory_dir(self) -> Path:
+        return self.data_dir / "shared" / "memory"
 
-    @property
-    def threads_dir(self) -> Path:
-        return self.state_dir / "threads"
+    def user_paths(self, username: str) -> UserPaths:
+        """Where one user's threads, workspaces, history and memory live."""
+        root = self.users_dir / username
+        memory = (
+            self.shared_memory_dir
+            if self.memory_scope == "shared"
+            else root / "state" / "memory"
+        )
+        return UserPaths(root=root, memory_dir=memory)
 
     @property
     def secrets_file(self) -> Path:
@@ -644,6 +678,11 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
         **{str(k): str(v) for k, v in (instructions_raw.get("vars") or {}).items()},
     }
 
+    memory_raw = data.get("memory", {})
+    memory_scope = str(memory_raw.get("scope", "user")).strip().lower()
+    if memory_scope not in MEMORY_SCOPES:
+        problems.append(f"memory.scope {memory_scope!r} must be one of {', '.join(MEMORY_SCOPES)}")
+
     data_dir = settings.profile_data_dir(profile_id)
     env = _resolve_env(profile_id, env_spec, data_dir / _SECRETS_FILE, path)
     try:
@@ -676,6 +715,7 @@ def load(path: str | Path, *, settings: EngineSettings | None = None) -> Profile
         hash=_hash_files(hashed),
         raw_toml=raw_toml,
         redact_terms=redact_terms,
+        memory_scope=memory_scope,
     )
 
     if problems:

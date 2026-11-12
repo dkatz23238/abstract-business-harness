@@ -1,9 +1,10 @@
 """AG-UI server for a profile-driven analysis agent.
 
-Every chat thread gets its own isolated agent instance and workspace
-(workspaces/<thread_id>/), so parallel chats can't mix assets and a fresh
-conversation never shows stale files. Memory stays shared across threads
-(cross-session knowledge); plans are per thread.
+Every chat thread belongs to one user and gets its own isolated agent
+instance and workspace (users/<user>/workspaces/<thread_id>/), so parallel
+chats can't mix assets and a fresh conversation never shows stale files.
+Memory is per user or shared by the profile (`[memory] scope`); plans are
+per thread.
 
 Runs are DETACHED (see runs.py): POST /agui starts the run in a background
 task and the response only attaches to its buffered event stream, so a page
@@ -13,11 +14,12 @@ logged per thread so the timeline survives a refresh.
 
 Run with:  abstract serve --profile PATH --port 8811
 
-Auth: every request except `/admin/*`, the docs pages, and the built UI
-files must carry the API key as `Authorization: Bearer <key>` or
-`?token=` (the latter so iframe and EventSource links work). The key is
-created at startup in `<data-root>/api_key` and printed in the log.
-`/admin/*` is gated separately by `HARNESS_ADMIN_TOKEN`.
+Auth (see users.py): every request except `/auth/login`, `/healthz`, the
+docs pages, and the built UI files must carry a user's API key or a session
+token from `/auth/login`, as `Authorization: Bearer <token>` or `?token=`
+(the latter so iframe and EventSource links work). A caller always writes
+to their own threads. `?owner=<user>` reads someone else's, which needs the
+admin role or `shared` visibility. `/admin/*` needs the admin role.
 
 When `ui/dist` (or `HARNESS_UI_DIR`) contains `index.html`, that build is
 served on `/` by the same process. API routes stay on their own paths.
@@ -29,41 +31,54 @@ import asyncio
 import contextlib
 import json
 import os
-import secrets
 import shutil
 import signal
 import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_ai.usage import UsageLimits
 from starlette.datastructures import Headers, QueryParams
 
-from . import __version__, admin, engine as engine_mod, profile as profile_mod
-from .auth import ApiKey, load_or_create_api_key
+from . import __version__, admin, engine as engine_mod, layout, profile as profile_mod
 from .api_docs import (
+    ACCOUNT,
     EVENTS,
     OPENAPI_TAGS,
     PROFILE,
     RUNS,
     THREADS,
     WORKSPACE,
+    ApiKeyResponse,
+    ChangePasswordBody,
     EventStreamResponse,
+    LoginBody,
+    LoginResponse,
     SaveThreadBody,
+    UserOut,
     install as install_openapi,
 )
 from .bridge import NestedCallBridge, hub, safe_id as _safe_id
-from .config import EngineSettings, load_dotenv
+from .config import LEGACY_ENV_VARS, EngineSettings, load_dotenv
 from .engine import run_model
-from .profile import Profile, coerce_effort
+from .profile import Profile, UserPaths, coerce_effort
 from .runs import RunActiveError, RunManager, ThreadRun, next_or_shutdown, shutdown
 from .usage import UsageMeter, summary as usage_summary
+from .users import Bootstrap, LoginThrottle, User, UserError, UserStore, open_store, valid_username
+
+_OWNER_QUERY = Query(
+    None,
+    description=(
+        "Whose thread to read. Defaults to the caller. Another user's threads "
+        "need the admin role or `shared` visibility, and are read-only."
+    ),
+)
 
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
@@ -92,33 +107,53 @@ def _hook_shutdown_signals() -> None:
             return
 
 
-def log_api_key(app: FastAPI) -> None:
-    """Print the API key once for this app.
+def log_startup(app: FastAPI) -> None:
+    """Print account setup, migration steps, and a generated admin key, once.
 
-    The CLI prints it before uvicorn binds. The lifespan prints it for
+    The CLI prints before uvicorn binds. The lifespan prints for
     `uvicorn abstract.server:app`, and skips when the CLI already did.
     """
-    if getattr(app.state, "api_key_logged", False):
+    if getattr(app.state, "startup_logged", False):
         return
-    app.state.api_key_logged = True
-    print(f"[abstract] api key: {app.state.harness.api_key.value}", file=sys.stderr)
+    app.state.startup_logged = True
+    state = app.state.harness
+    for note in state.bootstrap.notes:
+        print(f"[abstract] {note}", file=sys.stderr)
+    for note in state.migration_notes:
+        print(f"[abstract] migrate: {note}", file=sys.stderr)
+    if state.bootstrap.generated_admin_key:
+        print(
+            f"[abstract] admin api key (shown once): {state.bootstrap.generated_admin_key}",
+            file=sys.stderr,
+        )
+    for name in LEGACY_ENV_VARS:
+        if os.environ.get(name):
+            print(
+                f"[abstract] warning: {name} is no longer used; remove it "
+                "(sign in as a user, or use that user's API key)",
+                file=sys.stderr,
+            )
 
 
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
-    log_api_key(app)
+    log_startup(app)
     _hook_shutdown_signals()
     yield
     shutdown.set()
 
 
 # Swagger UI loads these without a key. Calls made from "Try it out" still
-# need the API key; the scheme is on each operation.
-_PUBLIC_PATHS = frozenset({"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
+# need a token; the scheme is on each operation.
+_PUBLIC_PATHS = frozenset(
+    {"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json", "/auth/login", "/healthz"}
+)
 
 
-class _TokenMiddleware:
-    """Bearer/`?token=` check as pure ASGI middleware.
+class _AuthMiddleware:
+    """Resolve the Bearer/`?token=` credential to a user, as pure ASGI middleware.
+
+    The user goes into `scope["state"]["user"]` (`request.state.user`).
 
     Deliberately not `@app.middleware("http")` (BaseHTTPMiddleware): that
     wrapper pipes every response body through an anyio memory stream, which
@@ -126,16 +161,9 @@ class _TokenMiddleware:
     disconnects — one of the things that kept the server alive on Ctrl+C.
     """
 
-    def __init__(
-        self,
-        app,
-        api_key: ApiKey,
-        skip_prefixes: tuple[str, ...] = (),
-        ui_dir: Path | None = None,
-    ):
+    def __init__(self, app, users: UserStore, ui_dir: Path | None = None):
         self.app = app
-        self.api_key = api_key
-        self.skip_prefixes = skip_prefixes
+        self.users = users
         self.ui_dir = ui_dir
 
     def _ui_asset(self, path: str) -> bool:
@@ -167,22 +195,24 @@ class _TokenMiddleware:
         if path in _PUBLIC_PATHS or path.startswith("/docs/"):
             await self.app(scope, receive, send)
             return
-        if self.skip_prefixes and any(
-            path == p or path.startswith(p.rstrip("/") + "/") for p in self.skip_prefixes
-        ):
-            await self.app(scope, receive, send)
-            return
         if scope["type"] == "http" and scope.get("method") != "OPTIONS":
             supplied = (
                 Headers(scope=scope).get("authorization", "").removeprefix("Bearer ").strip()
             )
             if not supplied:
                 supplied = QueryParams(scope.get("query_string", b"")).get("token", "")
-            if not secrets.compare_digest(supplied.encode(), self.api_key.value.encode()):
+            user = self.users.resolve(supplied)
+            if user is None:
                 response = JSONResponse({"detail": "unauthorized"}, status_code=401)
                 await response(scope, receive, send)
                 return
+            scope.setdefault("state", {})["user"] = user
         await self.app(scope, receive, send)
+
+
+def thread_key(owner: str, thread_id: str) -> str:
+    """Run, agent and event-hub key: thread ids are only unique per owner."""
+    return f"{owner}/{_safe_id(thread_id)}"
 
 
 class AppState:
@@ -193,26 +223,35 @@ class AppState:
         profile: Profile,
         engine: EngineSettings,
         profile_path: Path,
-        api_key: ApiKey,
+        bootstrap: Bootstrap,
+        migration_notes: list[str] | None = None,
     ):
         self.profile = profile
         self.engine = engine
         self.profile_path = Path(profile_path).resolve()
-        self.api_key = api_key
+        self.bootstrap = bootstrap
+        self.users: UserStore = bootstrap.store
+        self.migration_notes = list(migration_notes or [])
+        self.login_throttle = LoginThrottle()
         self.runs = RunManager()
         self.agents: dict = {}
         self.agents_lock = asyncio.Lock()
         self._wire_hub()
 
+    def paths(self, owner: str) -> UserPaths:
+        return self.profile.user_paths(owner)
+
+    def _event_log_path(self, key: str) -> Path:
+        owner, thread = key.split("/", 1)
+        return self.paths(owner).threads_dir / thread / "tool_events.jsonl"
+
     def _apply_paths(self) -> None:
         self.profile.data_dir.mkdir(parents=True, exist_ok=True)
-        self.profile.workspaces_dir.mkdir(parents=True, exist_ok=True)
-        self.profile.threads_dir.mkdir(parents=True, exist_ok=True)
-        self.profile.state_dir.mkdir(parents=True, exist_ok=True)
+        self.profile.users_dir.mkdir(parents=True, exist_ok=True)
 
     def _wire_hub(self) -> None:
         self._apply_paths()
-        hub.log_dir = self.profile.threads_dir
+        hub.log_path = self._event_log_path
         hub.code_tool_names = frozenset({self.profile.code_tool.name, "run_code"})
         try:
             from . import plugins
@@ -223,14 +262,6 @@ class AppState:
             print(f"[server] could not load data tools for counters: {exc!r}", file=sys.stderr)
             hub.data_tools = frozenset()
 
-    @property
-    def workspaces_root(self) -> Path:
-        return self.profile.workspaces_dir
-
-    @property
-    def threads_dir(self) -> Path:
-        return self.profile.threads_dir
-
     def reload_from_disk(self, *, drop_agents: bool = True) -> Profile:
         self.profile = profile_mod.load(self.profile_path, settings=self.engine)
         self._wire_hub()
@@ -238,8 +269,8 @@ class AppState:
             self.agents.clear()
         return self.profile
 
-    async def agent_for(self, thread_id: str):
-        key = _safe_id(thread_id)
+    async def agent_for(self, owner: str, thread_id: str):
+        key = thread_key(owner, thread_id)
         async with self.agents_lock:
             # Rebuild if the profile files changed (admin PUT, or an editor).
             on_disk = profile_mod.load(self.profile_path, settings=self.engine)
@@ -248,7 +279,9 @@ class AppState:
                 self._wire_hub()
                 self.agents.clear()
             if key not in self.agents:
-                built = engine_mod.build(self.profile, instance=key)
+                built = engine_mod.build(
+                    self.profile, user=owner, instance=_safe_id(thread_id)
+                )
                 hub.data_tools = built.data_tools
                 self.agents[key] = built
             return self.agents[key]
@@ -319,9 +352,18 @@ def create_app(
     engine: EngineSettings | None = None,
     profile_path: Path | None = None,
 ) -> FastAPI:
+    """Build the server. Raises BootstrapError when the first start has no admin password."""
     engine = engine or EngineSettings()
-    api_key = load_or_create_api_key(engine.data_root, seed=engine.ui_token)
-    state = AppState(profile, engine, profile_path or profile.path, api_key)
+    bootstrap = open_store(
+        engine.data_root,
+        admin_password=engine.admin_password,
+        admin_api_key=engine.admin_api_key,
+    )
+    # Only after the store opened: a failed first start must not move data.
+    migration_notes = layout.migrate(profile)
+    state = AppState(
+        profile, engine, profile_path or profile.path, bootstrap, migration_notes
+    )
     app = FastAPI(
         title=f"{profile.name} AG-UI server",
         version=__version__,
@@ -330,12 +372,13 @@ def create_app(
             "Start a conversation with `POST /agui`. The body is an "
             "[AG-UI RunAgentInput](https://docs.ag-ui.com/concepts/messages) "
             "and the response is a server-sent event stream. Saved threads, "
-            "workspace files, and the admin editor live on this same server.\n\n"
-            "Send the API key as `Authorization: Bearer <key>` "
-            "(or `?token=` on links that cannot set a header). "
-            "The key is created at startup, printed in the server log, and stored in "
-            "`<data-root>/api_key`. `POST /admin/api-key` replaces it. "
-            "`/admin` routes use `HARNESS_ADMIN_TOKEN` instead of the API key."
+            "workspace files, users, and the admin editor live on this same server.\n\n"
+            "Send a user's API key as `Authorization: Bearer <key>` "
+            "(or `?token=` on links that cannot set a header). `POST /auth/login` "
+            "trades a username and password for a session token that works the same way. "
+            "Threads belong to the caller. `?owner=<user>` reads another user's threads, "
+            "read-only, for admins and users with `shared` visibility. "
+            "`/admin` routes need the admin role."
         ),
         servers=[{"url": "/", "description": profile.name}],
         openapi_tags=OPENAPI_TAGS,
@@ -344,12 +387,7 @@ def create_app(
     app.state.harness = state
     ui_root = _usable_ui_dir(engine.ui_dir)
 
-    app.add_middleware(
-        _TokenMiddleware,
-        api_key=api_key,
-        skip_prefixes=("/admin",),
-        ui_dir=ui_root,
-    )
+    app.add_middleware(_AuthMiddleware, users=state.users, ui_dir=ui_root)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=engine.ui_origins,
@@ -357,16 +395,38 @@ def create_app(
         allow_headers=["*"],
     )
 
-    def _conversation_path(thread_id: str) -> Path:
-        return state.threads_dir / _safe_id(thread_id) / "conversation.json"
+    def _caller(request: Request) -> User:
+        return request.state.user
+
+    def _read_owner(request: Request, owner: str | None) -> str:
+        """The owner a read is for. Raises 403 when the caller may not read it."""
+        user = _caller(request)
+        if not owner or owner == user.username:
+            return user.username
+        if not valid_username(owner):
+            raise HTTPException(400, "invalid owner")
+        if not user.can_read(owner):
+            raise HTTPException(403, f"you cannot view {owner}'s threads")
+        return owner
+
+    def _write_owner(request: Request, owner: str | None) -> str:
+        """Writes only ever touch the caller's own threads."""
+        user = _caller(request)
+        if owner and owner != user.username:
+            raise HTTPException(403, f"read-only: thread belongs to {owner}")
+        return user.username
+
+    def _conversation_path(owner: str, thread_id: str) -> Path:
+        return state.paths(owner).threads_dir / _safe_id(thread_id) / "conversation.json"
 
     def _persist_conversation(
+        owner: str,
         thread_id: str,
         messages: list[dict],
         model: str | None = None,
         effort: str | None = None,
     ) -> None:
-        path = _conversation_path(thread_id)
+        path = _conversation_path(owner, thread_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         existing: dict = {}
         if path.exists():
@@ -380,6 +440,7 @@ def create_app(
             effort = existing.get("effort")
         payload = {
             "id": _safe_id(thread_id),
+            "owner": owner,
             "title": _title_from_messages(messages),
             "updated_at": time.time(),
             "model": model,
@@ -389,10 +450,90 @@ def create_app(
         }
         path.write_text(json.dumps(payload, ensure_ascii=False))
 
+    @app.get("/healthz", tags=[PROFILE], summary="Health check")
+    async def healthz():
+        """Public liveness probe: server version and profile id. Needs no token."""
+        return {"ok": True, "version": __version__, "profile": state.profile.id}
+
     @app.get("/profile", tags=[PROFILE], summary="Profile shown in the chat UI")
     async def get_profile():
         """Name, model, effort levels, and UI copy for the loaded profile."""
         return state.profile.ui_config()
+
+    # ---------------- account ----------------
+
+    def _client_address(request: Request) -> str:
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+        return request.client.host if request.client else "?"
+
+    @app.post(
+        "/auth/login",
+        tags=[ACCOUNT],
+        summary="Sign in",
+        response_model=LoginResponse,
+        responses={
+            401: {"description": "Wrong username or password."},
+            429: {"description": "Too many failed attempts; see `Retry-After`."},
+        },
+    )
+    def login(body: LoginBody, request: Request):
+        """Trade a username and password for a session token (valid 30 days).
+
+        Send the token like an API key. Changing the password ends every session.
+        """
+        throttle = state.login_throttle
+        keys = (f"user:{body.username.strip().lower()}", f"ip:{_client_address(request)}")
+        wait = throttle.retry_after(*keys)
+        if wait > 0:
+            return JSONResponse(
+                {"detail": "too many failed sign-ins; try again later"},
+                status_code=429,
+                headers={"Retry-After": str(int(wait) + 1)},
+            )
+        user = state.users.check_password(body.username, body.password)
+        if user is None:
+            throttle.failed(*keys)
+            return JSONResponse({"detail": "invalid username or password"}, status_code=401)
+        throttle.succeeded(*keys)
+        return {"token": state.users.issue_session(user), "user": user.public()}
+
+    @app.get("/me", tags=[ACCOUNT], summary="Who am I", response_model=UserOut)
+    async def me(request: Request):
+        """The user the token belongs to: name, role, and visibility."""
+        return _caller(request).public()
+
+    @app.put(
+        "/me/password",
+        tags=[ACCOUNT],
+        summary="Change my password",
+        response_model=LoginResponse,
+        responses={400: {"description": "The new password is too short."},
+                   403: {"description": "The current password is wrong."}},
+    )
+    def change_password(body: ChangePasswordBody, request: Request):
+        """Change the caller's password. Every existing session ends; a fresh token is returned."""
+        user = _caller(request)
+        if state.users.check_password(user.username, body.current_password) is None:
+            return JSONResponse({"detail": "current password is wrong"}, status_code=403)
+        try:
+            user = state.users.update(user.username, password=body.new_password)
+        except UserError as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        return {"token": state.users.issue_session(user), "user": user.public()}
+
+    @app.post(
+        "/me/api-key",
+        tags=[ACCOUNT],
+        summary="Rotate my API key",
+        response_model=ApiKeyResponse,
+    )
+    async def rotate_my_api_key(request: Request):
+        """Replace the caller's API key. The new key is returned once; the old one stops working."""
+        return {"api_key": state.users.rotate_api_key(_caller(request).username)}
+
+    # ---------------- runs ----------------
 
     @app.post(
         "/agui",
@@ -404,38 +545,43 @@ def create_app(
             "reattach with GET /agui/{thread_id}/attach."
         ),
         responses={
+            403: {"description": "`?owner=` names another user; runs are only on your own threads."},
             409: {"description": "A run is already active for this thread."},
             422: {"description": "The body is not a valid AG-UI RunAgentInput."},
         },
     )
-    async def agui_run(request: Request):
-        """Start an agent run and stream its AG-UI events.
+    async def agui_run(request: Request, owner: str | None = _OWNER_QUERY):
+        """Start an agent run on one of the caller's threads and stream its AG-UI events.
 
         The body is a `RunAgentInput`. `forwardedProps.effort` overrides reasoning
         effort for this run, and `forwardedProps.model` picks one of the
         profile's `model_choices`. The HTTP response only attaches to the run.
         """
+        owner = _write_owner(request, owner)
         try:
             body = await request.json()
             thread_id = body.get("threadId") or body.get("thread_id") or "default"
         except Exception:
             thread_id = "default"
-        built = await state.agent_for(thread_id)
+        key = thread_key(owner, thread_id)
+        paths = state.paths(owner)
+        built = await state.agent_for(owner, thread_id)
         try:
             adapter = await AGUIAdapter.from_request(request, agent=built.agent)
         except ValidationError as exc:
             return JSONResponse({"detail": json.loads(exc.json())}, status_code=422)
-        bridge = NestedCallBridge(thread_id, data_tools=built.data_tools)
+        bridge = NestedCallBridge(key, data_tools=built.data_tools)
         meter = UsageMeter(
-            state.threads_dir,
+            paths.threads_dir,
             thread_id,
             price_overrides=state.profile.model.prices,
+            hub_key=key,
         )
         run_id = getattr(adapter.run_input, "run_id", None)
         input_messages = list(getattr(adapter.run_input, "messages", []) or [])
         limits = UsageLimits(request_limit=state.profile.model.request_limit)
         stored: dict = {}
-        conv_path = _conversation_path(thread_id)
+        conv_path = _conversation_path(owner, thread_id)
         if conv_path.exists():
             try:
                 stored = json.loads(conv_path.read_text())
@@ -480,6 +626,7 @@ def create_app(
                     try:
                         new_messages = AGUIAdapter.dump_messages(result.new_messages())
                         _persist_conversation(
+                            owner,
                             thread_id,
                             [
                                 m.model_dump(mode="json", by_alias=True)
@@ -492,7 +639,7 @@ def create_app(
                         print(f"[runs] conversation persist failed: {persist_exc!r}", file=sys.stderr)
 
         try:
-            run = state.runs.start(thread_id, run_id, execute)
+            run = state.runs.start(key, run_id, execute)
         except RunActiveError:
             return JSONResponse(
                 {"detail": "a run is already active for this thread"}, status_code=409
@@ -507,17 +654,19 @@ def create_app(
         response_description="AG-UI events from the start of the active run, then live events.",
         responses={404: {"description": "This thread has no run to attach to."}},
     )
-    async def agui_attach(thread_id: str):
+    async def agui_attach(thread_id: str, request: Request, owner: str | None = _OWNER_QUERY):
         """Replay the buffered event stream for the thread's active run, then follow it."""
-        run = state.runs.get(thread_id)
+        owner = _read_owner(request, owner)
+        run = state.runs.get(thread_key(owner, thread_id))
         if run is None:
             return JSONResponse({"detail": "no run for this thread"}, status_code=404)
         return StreamingResponse(run.attach(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     @app.get("/runs/{thread_id}", tags=[RUNS], summary="Run status")
-    async def run_status(thread_id: str):
+    async def run_status(thread_id: str, request: Request, owner: str | None = _OWNER_QUERY):
         """Whether this thread has a run, and that run's id, timing, and error."""
-        run = state.runs.get(thread_id)
+        owner = _read_owner(request, owner)
+        run = state.runs.get(thread_key(owner, thread_id))
         if run is None:
             return {"active": False}
         return run.status()
@@ -532,13 +681,15 @@ def create_app(
             "Comments of the form `: ping` are keepalives."
         ),
     )
-    async def tool_events(thread_id: str):
+    async def tool_events(thread_id: str, request: Request, owner: str | None = _OWNER_QUERY):
         """Stream tool-call activity for one thread."""
-        queue = await hub.subscribe(thread_id)
-        history = hub.replay(thread_id)
-        summary = hub.summary(thread_id)
+        owner = _read_owner(request, owner)
+        key = thread_key(owner, thread_id)
+        queue = await hub.subscribe(key)
+        history = hub.replay(key)
+        summary = hub.summary(key)
         summary["usage"] = usage_summary(
-            state.threads_dir, thread_id, overrides=state.profile.model.prices
+            state.paths(owner).threads_dir, thread_id, overrides=state.profile.model.prices
         )
 
         async def stream():
@@ -556,7 +707,7 @@ def create_app(
                         return
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             finally:
-                await hub.unsubscribe(thread_id, queue)
+                await hub.unsubscribe(key, queue)
 
         return StreamingResponse(
             stream(),
@@ -564,42 +715,69 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # ---------------- workspace ----------------
+
     @app.get(
         "/workspace/{thread_id}/files",
         tags=[WORKSPACE],
         summary="List workspace files",
     )
-    async def workspace_files(thread_id: str):
+    async def workspace_files(thread_id: str, request: Request, owner: str | None = _OWNER_QUERY):
         """Files the agent wrote under this thread's workspace, excluding dotfiles."""
-        root = state.workspaces_root / _safe_id(thread_id)
+        owner = _read_owner(request, owner)
+        root = state.paths(owner).workspaces_dir / _safe_id(thread_id)
         entries = []
         if root.exists():
             for path in sorted(root.rglob("*")):
-                if path.is_dir() or any(part.startswith(".") for part in path.parts):
+                rel = path.relative_to(root)
+                if path.is_dir() or any(part.startswith(".") for part in rel.parts):
                     continue
                 stat = path.stat()
                 entries.append(
                     {
-                        "path": path.relative_to(root).as_posix(),
+                        "path": rel.as_posix(),
                         "size": stat.st_size,
-                        "mtime": stat.mtime if hasattr(stat, "mtime") else stat.st_mtime,
+                        "mtime": stat.st_mtime,
                         "kind": path.suffix.lstrip(".").lower() or "file",
                     }
                 )
-        return {"root": str(root), "files": entries}
+        return {"root": str(root), "owner": owner, "files": entries}
 
-    @app.get("/threads", tags=[THREADS], summary="List saved threads")
-    async def list_threads():
-        """Saved conversations, newest first, plus the profile's default model and effort."""
-        threads = []
-        for conv in state.threads_dir.glob("*/conversation.json"):
+    @app.get(
+        "/workspace/raw/{thread_id}/{path:path}",
+        tags=[WORKSPACE],
+        summary="Download a workspace file",
+        response_class=FileResponse,
+        responses={404: {"description": "No such file in this thread's workspace."}},
+    )
+    async def workspace_raw(
+        thread_id: str, path: str, request: Request, owner: str | None = _OWNER_QUERY
+    ):
+        """Bytes of one workspace file; `path` is as listed by `/workspace/{thread_id}/files`."""
+        owner = _read_owner(request, owner)
+        root = (state.paths(owner).workspaces_dir / _safe_id(thread_id)).resolve()
+        target = (root / path).resolve()
+        if (
+            not target.is_relative_to(root)
+            or any(part.startswith(".") for part in target.relative_to(root).parts)
+            or not target.is_file()
+        ):
+            raise HTTPException(404, "not found")
+        return FileResponse(target)
+
+    # ---------------- threads ----------------
+
+    def _thread_rows(owner: str) -> list[dict]:
+        rows = []
+        for conv in state.paths(owner).threads_dir.glob("*/conversation.json"):
             try:
                 data = json.loads(conv.read_text())
             except ValueError:
                 continue
-            threads.append(
+            rows.append(
                 {
                     "id": conv.parent.name,
+                    "owner": owner,
                     "title": data.get("title", ""),
                     "updated_at": data.get("updated_at", 0),
                     "message_count": len(data.get("messages", [])),
@@ -607,6 +785,31 @@ def create_app(
                     "effort": data.get("effort"),
                 }
             )
+        return rows
+
+    @app.get("/threads", tags=[THREADS], summary="List saved threads")
+    async def list_threads(
+        request: Request,
+        scope: str = Query(
+            "mine",
+            description=(
+                "`mine` lists the caller's threads. `all` adds every other user's threads "
+                "the caller may read (admins and `shared` users); each row has `owner`."
+            ),
+        ),
+    ):
+        """Saved conversations, newest first, plus the profile's default model and effort."""
+        user = _caller(request)
+        owners = [user.username]
+        if scope == "all" and (user.is_admin or user.visibility == "shared"):
+            users_dir = state.profile.users_dir
+            if users_dir.is_dir():
+                owners += sorted(
+                    d.name
+                    for d in users_dir.iterdir()
+                    if d.is_dir() and valid_username(d.name) and d.name != user.username
+                )
+        threads = [row for owner in owners for row in _thread_rows(owner)]
         threads.sort(key=lambda t: t["updated_at"], reverse=True)
         return {
             "threads": threads,
@@ -616,23 +819,36 @@ def create_app(
         }
 
     @app.get("/threads/{thread_id}", tags=[THREADS], summary="Load a thread")
-    async def get_thread(thread_id: str):
+    async def get_thread(thread_id: str, request: Request, owner: str | None = _OWNER_QUERY):
         """Saved transcript for one thread. A missing thread returns an empty transcript."""
-        path = _conversation_path(thread_id)
+        owner = _read_owner(request, owner)
+        path = _conversation_path(owner, thread_id)
         if not path.exists():
             return {
                 "id": thread_id,
+                "owner": owner,
                 "title": "",
                 "messages": [],
                 "model": state.profile.model.spec,
                 "effort": state.profile.model.effort,
             }
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
+        data.setdefault("owner", owner)
+        return data
 
-    @app.put("/threads/{thread_id}", tags=[THREADS], summary="Save a thread")
-    async def save_thread(thread_id: str, body: SaveThreadBody):
+    @app.put(
+        "/threads/{thread_id}",
+        tags=[THREADS],
+        summary="Save a thread",
+        responses={403: {"description": "`?owner=` names another user."}},
+    )
+    async def save_thread(
+        thread_id: str, body: SaveThreadBody, request: Request, owner: str | None = _OWNER_QUERY
+    ):
         """Replace the saved transcript. Effort and model are updated only when the body includes them."""
+        owner = _write_owner(request, owner)
         _persist_conversation(
+            owner,
             thread_id,
             body.messages,
             model=state.profile.model.pick(body.model) if body.model is not None else None,
@@ -644,29 +860,30 @@ def create_app(
         "/threads/{thread_id}",
         tags=[THREADS],
         summary="Delete a thread",
-        responses={409: {"description": "The thread's run is still active."}},
+        responses={
+            403: {"description": "`?owner=` names another user."},
+            409: {"description": "The thread's run is still active."},
+        },
     )
-    async def delete_thread(thread_id: str):
+    async def delete_thread(thread_id: str, request: Request, owner: str | None = _OWNER_QUERY):
         """Delete the conversation, its tool log, and its workspace."""
-        run = state.runs.get(thread_id)
+        owner = _write_owner(request, owner)
+        key = thread_key(owner, thread_id)
+        run = state.runs.get(key)
         if run is not None and run.active:
             return JSONResponse(
                 {"detail": "cannot delete a thread while its run is active"}, status_code=409
             )
-        key = _safe_id(thread_id)
         async with state.agents_lock:
             state.agents.pop(key, None)
-        for path in (state.threads_dir / key, state.workspaces_root / key):
+        paths = state.paths(owner)
+        safe = _safe_id(thread_id)
+        for path in (paths.threads_dir / safe, paths.workspaces_dir / safe):
             shutil.rmtree(path, ignore_errors=True)
         return {"ok": True}
 
     admin.mount(app, state)
     install_openapi(app)
-    app.mount(
-        "/workspace/raw",
-        StaticFiles(directory=str(state.workspaces_root)),
-        name="workspaces",
-    )
     # Mounted last. A mount at "/" matches every path, so it has to come
     # after the API routes, which then win on a full match.
     if ui_root is not None:
