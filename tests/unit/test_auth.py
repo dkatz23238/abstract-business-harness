@@ -119,7 +119,10 @@ def test_api_key_rotation(admin_client):
 
 def test_user_management_rules(admin_client):
     client = admin_client()
-    assert client.post("/admin/users", json={"username": "Bad Name", "password": "x" * 8}).status_code == 400
+    r = client.post("/admin/users", json={"username": "Bad Name", "password": "x" * 8})
+    assert r.status_code == 400 and "invalid username" in r.json()["detail"]
+    assert client.post("/admin/users", json={"username": ".hidden", "password": "x" * 8}).status_code == 400
+    assert client.post("/admin/users", json={"username": "maria.gomez", "password": "x" * 8}).status_code == 201
     assert client.post("/admin/users", json={"username": "erin", "password": "short"}).status_code == 400
     as_user(client, "erin")
     assert client.post("/admin/users", json={"username": "erin", "password": "x" * 8}).status_code == 400
@@ -129,7 +132,7 @@ def test_user_management_rules(admin_client):
     assert r.json()["visibility"] == "shared" and r.json()["role"] == "admin"
     assert client.patch("/admin/users/ghost", json={"role": "user"}).status_code == 404
     names = [u["username"] for u in client.get("/admin/users").json()["users"]]
-    assert names == ["admin", "erin"]
+    assert names == ["admin", "erin", "maria.gomez"]
 
 
 def _save(client, thread, headers=None, text="hello"):

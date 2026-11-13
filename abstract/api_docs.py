@@ -170,7 +170,11 @@ class ApiKeyResponse(BaseModel):
 
 class CreateUserBody(BaseModel):
     username: str = Field(
-        description="1-32 characters: lowercase letters, digits, `-` or `_`.", examples=["alice"]
+        description=(
+            "1-32 characters: lowercase letters, digits, `.`, `-` or `_`, "
+            "starting with a letter or digit."
+        ),
+        examples=["maria.gomez"],
     )
     password: str = Field(description="At least 8 characters.")
     role: Literal["user", "admin"] = "user"

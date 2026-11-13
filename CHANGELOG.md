@@ -3,6 +3,19 @@
 Versions follow [semver](https://semver.org). Each release is a `vX.Y.Z`
 git tag and the Docker image tags `X.Y.Z`, `X.Y`, and `latest`.
 
+## 0.2.1
+
+### Changed
+
+- Usernames may contain dots (`maria.gomez`). They still start with a letter
+  or digit.
+
+### Fixed
+
+- Users tab: errors no longer vanish right after they appear. Errors from a
+  dialog (add user, reset password, delete) show in that dialog, and the
+  add-user form says what is wrong with a name or password while you type.
+
 ## 0.2.0
 
 Breaking: see [docs/upgrade-0.2.md](docs/upgrade-0.2.md).

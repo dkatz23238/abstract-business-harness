@@ -38,7 +38,7 @@ ROLES = ("user", "admin")
 VISIBILITIES = ("siloed", "shared")
 SESSION_TTL_S = 30 * 24 * 3600
 MIN_PASSWORD_LEN = 8
-USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")
 
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1
 
@@ -201,8 +201,8 @@ class UserStore:
         username = (username or "").strip().lower()
         if not valid_username(username):
             raise UserError(
-                "username must be 1-32 characters: lowercase letters, digits, - or _, "
-                "starting with a letter or digit"
+                f"invalid username {username!r}: use 1-32 lowercase letters, digits, "
+                "dots, - or _, starting with a letter or digit (e.g. maria.gomez)"
             )
         _check_password(password)
         _check_choice("role", role, ROLES)
